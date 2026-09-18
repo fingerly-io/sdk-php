@@ -1,0 +1,77 @@
+name: PHP SDK
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      # Both results are wanted: a failure on one version must not hide
+      # whether the floor still works.
+      fail-fast: false
+      matrix:
+        # 8.1 is the supported floor; the rest guard against drift.
+        php: ["8.1", "8.2", "8.3", "8.4"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      - run: composer validate --strict
+      - run: vendor/bin/phpunit
+      - run: vendor/bin/phpstan analyse --no-progress
+
+  style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      - run: vendor/bin/php-cs-fixer fix --dry-run --diff
+
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+          extensions: curl, json
+          coverage: none
+      # Each SDK's CI carries the guard that matches its own failure mode.
+      # Here it is that the package installs and works with no Composer
+      # dependency at all: everything but ext-curl and ext-json is a suggest,
+      # so a webhook receiver or an event reader pulls in nothing.
+      - name: no runtime dependencies
+        run: |
+          composer install --no-dev --no-interaction --quiet
+          installed=$(composer show --no-dev --name-only 2>/dev/null | sed '/^$/d' | wc -l)
+          if [ "$installed" -ne 0 ]; then
+            echo "the package acquired a runtime dependency:"; composer show --no-dev; exit 1
+          fi
+      - name: the core works without a single vendor package
+        run: |
+          php -r '
+            require "vendor/autoload.php";
+            $ok = Fingerly\Webhook::verify(
+                secret: "whsec_x",
+                payload: "{}",
+                timestamp: (string) time(),
+                signature: "sha256=".hash_hmac("sha256", time().".{}", "whsec_x"),
+            );
+            if (!$ok) { fwrite(STDERR, "verification failed\n"); exit(1); }
+            new Fingerly\Client("fly_sk_us_production_ci");
+            new Fingerly\Proxy([
+                "proxy_key" => "fly_px_us_production_ci",
+                "client_ip" => fn ($r) => "203.0.113.7",
+            ]);
+            echo "the dependency-free build works", PHP_EOL;
+          '
