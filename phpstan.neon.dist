@@ -5,4 +5,5 @@ parameters:
     phpVersion: 80100
     paths:
         - src
+        - tests
     treatPhpDocTypesAsCertain: false
