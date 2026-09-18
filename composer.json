@@ -1,0 +1,53 @@
+{
+    "name": "fingerly/fingerly-php",
+    "description": "Server-side Fingerly SDK: event reads, webhook verification and a same-origin proxy for the browser SDK.",
+    "keywords": ["fingerly", "fingerprint", "fraud", "device", "webhook"],
+    "homepage": "https://fingerly.io",
+    "license": "Apache-2.0",
+    "type": "library",
+    "require": {
+        "php": "^8.1",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5",
+        "phpstan/phpstan": "^2.1",
+        "friendsofphp/php-cs-fixer": "^3.64",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/http-server-middleware": "^1.0",
+        "nyholm/psr7": "^1.8",
+        "illuminate/http": "^10.0 || ^11.0",
+        "symfony/http-kernel": "^6.4 || ^7.0"
+    },
+    "suggest": {
+        "psr/http-client": "To send API requests through your own PSR-18 client instead of ext-curl.",
+        "psr/http-factory": "Required alongside psr/http-client when supplying your own client.",
+        "psr/http-server-middleware": "To mount the same-origin proxy as PSR-15 middleware (Slim, Mezzio).",
+        "illuminate/http": "To mount the same-origin proxy as Laravel middleware.",
+        "symfony/http-kernel": "To mount the same-origin proxy as a Symfony kernel listener."
+    },
+    "autoload": {
+        "psr-4": {
+            "Fingerly\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Fingerly\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse",
+        "fmt": "php-cs-fixer fix",
+        "fmt:check": "php-cs-fixer fix --dry-run --diff",
+        "contract:sync": "php tools/sync-contract.php"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

@@ -1,0 +1,8 @@
+parameters:
+    level: 8
+    # The floor the package supports, so a feature newer than 8.1 is an error
+    # here rather than a fatal on someone's server.
+    phpVersion: 80100
+    paths:
+        - src
+    treatPhpDocTypesAsCertain: false
