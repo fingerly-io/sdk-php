@@ -74,10 +74,10 @@ final class ApiException extends \RuntimeException implements FingerlyException
     }
 
     /**
-     * True for the one retryable read failure: the event has not been archived
-     * yet.
+     * True when there is no such event.
      *
-     * {@see Events::waitFor()} polls on exactly this and nothing else.
+     * One is readable as soon as identification answers, so this means a
+     * request id that was never issued rather than one that has not landed.
      */
     public function isEventNotFound(): bool
     {

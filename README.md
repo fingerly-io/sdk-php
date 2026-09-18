@@ -66,7 +66,7 @@ handles the lot, and the concrete classes tell them apart:
 | --- | --- |
 | `ConfigurationException` | An option was rejected. Nothing was sent. It is an `InvalidArgumentException`, because a key that was never valid will not become valid on a retry. |
 | `ApiException` | The API answered with a non-2xx status. |
-| `TimeoutException` | An SDK deadline elapsed; `getOperation()` says which. |
+| `TimeoutException` | The request deadline elapsed. |
 | `ConnectionException` | The API could not be reached, or the connection failed mid-response. |
 
 `ApiException` carries `getStatus()`, and optional `getErrorCode()`,
@@ -107,20 +107,21 @@ if (!$event->isScored()) {
 `$event->raw` and `$page->raw` keep the response body exactly as it arrived, so
 a field the API adds later is reachable without an upgrade.
 
-## Wait for a fresh identification
+## Read an event you just identified
 
-Identification answers before the event is archived, so reach for this only
-when you have just identified a visitor:
+An event is readable as soon as identification answers, so this needs nothing
+special:
 
 ```php
-$event = $fingerly->events->waitFor($requestId, ['timeout' => 10, 'interval' => 0.25]);
+$event = $fingerly->events->get($requestId);
 ```
 
-Only `event_not_found` is retried; every other failure is thrown at once. When
-the event is still missing at the deadline, `TimeoutException` keeps the last
-`ApiException` as its `getPrevious()`, so the reason it kept waiting is not
-lost. The loop is driven by `hrtime()`, so an NTP step mid-wait cannot confuse
-it.
+Earlier versions had a `waitFor` that polled through the gap between
+identification and the event becoming queryable. There is no gap, so
+`isEventNotFound()` now means a request id that was never issued.
+
+The archived `document` arrives moments after the event itself, so check
+`hasDocument` rather than assuming it is there.
 
 ## Verify a backend action
 
@@ -275,8 +276,8 @@ production secrets in fixtures.
 
 `Client.php` holds the client and its options. `Transport.php` performs one
 HTTP exchange, over ext-curl or a supplied PSR-18 client, and maps failures to
-`ApiException`. `Events.php` owns the event reads, the list filters and the
-polling loop; `Event.php`, `EventPage.php`, `EventTrigger.php` and
+`ApiException`. `Events.php` owns the event reads and the list filters;
+`Event.php`, `EventPage.php`, `EventTrigger.php` and
 `WebhookEvent.php` are what they decode into, and `Json.php` reads those
 bodies without trusting their shape. `Webhook.php` verifies signatures and
 needs nothing else in the package. `Proxy.php` is the same-origin core, with

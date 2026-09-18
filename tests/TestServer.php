@@ -174,8 +174,8 @@ final class TestServer
      * The router the built-in server runs, as source.
      *
      * It records what it received and replies with the next canned answer,
-     * keeping the last one in place so a polling test can stop queueing once
-     * it has said what it wants to say.
+     * keeping the last one in place so a test that makes several requests can
+     * stop queueing once it has said what it wants to say.
      */
     private static function router(): string
     {

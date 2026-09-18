@@ -157,7 +157,7 @@ final class Transport
         // collector frees, and calling it is deprecated from 8.5.
 
         if (\CURLE_OPERATION_TIMEDOUT === $errno) {
-            throw new TimeoutException(TimeoutException::OPERATION_REQUEST);
+            throw new TimeoutException();
         }
         if (0 !== $errno || !is_string($response)) {
             throw new ConnectionException('fingerly: request failed: '.$this->redact($error));

@@ -7,11 +7,10 @@ namespace Fingerly\Tests;
 use Fingerly\ApiException;
 use Fingerly\Client;
 use Fingerly\ConfigurationException;
-use Fingerly\TimeoutException;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Event reads, the list filters, and the polling loop.
+ * Event reads and the list filters.
  *
  * @internal
  */
@@ -147,84 +146,53 @@ final class EventsTest extends TestCase
     }
 
     /**
-     * Identification answers before the event is archived, so the one
-     * retryable failure is polled through.
+     * An event is readable as soon as identification answers, so a missing one
+     * means a request id that was never issued. That is reported at once, in
+     * one request: there is nothing to wait for.
      */
-    public function testPollsUntilTheEventLands(): void
+    public function testReportsAMissingEventWithoutRetrying(): void
     {
-        $this->server = TestServer::start([
-            ['status' => 404, 'body' => Fixtures::notFound()],
-            ['status' => 404, 'body' => Fixtures::notFound()],
-            ['status' => 200, 'body' => Fixtures::event()],
-        ]);
+        $this->server = TestServer::always(404, Fixtures::notFound());
 
-        $event = $this->client()->events->waitFor('req_1', ['interval' => 0.01]);
-
-        self::assertSame('req_1', $event->requestId);
-        self::assertSame(3, $this->server->requestCount());
+        try {
+            $this->client()->events->get('req_1');
+            self::fail('a missing event should have raised');
+        } catch (ApiException $e) {
+            self::assertSame(404, $e->getStatus());
+            self::assertTrue($e->isEventNotFound());
+            self::assertSame('req_trace', $e->getRequestId());
+        }
+        self::assertSame(1, $this->server->requestCount());
     }
 
-    /** Only `404 event_not_found` is retried; everything else propagates. */
-    public function testStopsPollingOnAnyOtherFailure(): void
+    /** A plain 404 without the structured code is not the missing-event one. */
+    public function testDoesNotReadAnUnstructured404AsAMissingEvent(): void
+    {
+        $this->server = TestServer::always(404, 'not json at all');
+
+        try {
+            $this->client()->events->get('req_1');
+            self::fail('the read should have raised');
+        } catch (ApiException $e) {
+            self::assertSame(404, $e->getStatus());
+            self::assertFalse($e->isEventNotFound());
+        }
+    }
+
+    /** Every other failure propagates as it arrived, once. */
+    public function testPropagatesAnyOtherFailure(): void
     {
         $this->server = TestServer::always(403, json_encode([
             'error' => ['code' => 'forbidden', 'message' => 'no', 'status' => 403],
         ], \JSON_THROW_ON_ERROR));
 
         try {
-            $this->client()->events->waitFor('req_1', ['interval' => 0.01]);
-            self::fail('polling should have stopped');
+            $this->client()->events->get('req_1');
+            self::fail('the read should have raised');
         } catch (ApiException $e) {
             self::assertSame(403, $e->getStatus());
         }
         self::assertSame(1, $this->server->requestCount());
-    }
-
-    /** A plain 404 without the structured code is not the retryable one. */
-    public function testDoesNotPollOnAnUnstructured404(): void
-    {
-        $this->server = TestServer::always(404, 'not json at all');
-
-        try {
-            $this->client()->events->waitFor('req_1', ['interval' => 0.01]);
-            self::fail('polling should have stopped');
-        } catch (ApiException $e) {
-            self::assertSame(404, $e->getStatus());
-            self::assertFalse($e->isEventNotFound());
-        }
-        self::assertSame(1, $this->server->requestCount());
-    }
-
-    /** The reason it kept waiting is kept, not just the fact of a deadline. */
-    public function testGivesUpAtTheWaitDeadlineAndSaysWhy(): void
-    {
-        $this->server = TestServer::always(404, Fixtures::notFound());
-
-        try {
-            $this->client()->events->waitFor('req_1', ['timeout' => 0.3, 'interval' => 0.05]);
-            self::fail('the wait should have timed out');
-        } catch (TimeoutException $e) {
-            self::assertSame(TimeoutException::OPERATION_EVENT_WAIT, $e->getOperation());
-            $previous = $e->getPrevious();
-            self::assertInstanceOf(ApiException::class, $previous);
-            self::assertTrue($previous->isEventNotFound());
-        }
-    }
-
-    public function testRefusesAWaitThatCouldNeverPoll(): void
-    {
-        $this->server = TestServer::always(200, Fixtures::event());
-        $client = $this->client();
-
-        foreach ([['timeout' => 0], ['interval' => 0], ['timeout' => -1]] as $options) {
-            try {
-                $client->events->waitFor('req_1', $options);
-                self::fail('an impossible wait should have been refused');
-            } catch (ConfigurationException $e) {
-                self::assertNotSame('', $e->getMessage());
-            }
-        }
-        self::assertSame(0, $this->server->requestCount());
     }
 
     private function client(): Client

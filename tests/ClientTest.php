@@ -245,7 +245,7 @@ final class ClientTest extends TestCase
             $client->events->get('req_1');
             self::fail('the request should have timed out');
         } catch (TimeoutException $e) {
-            self::assertSame(TimeoutException::OPERATION_REQUEST, $e->getOperation());
+            self::assertStringContainsString('timed out', $e->getMessage());
         }
     }
 

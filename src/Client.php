@@ -32,7 +32,7 @@ final class Client
         'stream_factory',
     ];
 
-    /** Event reads and bounded polling under this client's secret key. */
+    /** Event reads under this client's secret key. */
     public readonly Events $events;
 
     /**

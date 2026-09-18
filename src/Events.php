@@ -11,11 +11,7 @@ namespace Fingerly;
  */
 final class Events
 {
-    private const DEFAULT_WAIT_TIMEOUT = 10.0;
-    private const DEFAULT_POLL_INTERVAL = 0.25;
-
     private const LIST_OPTIONS = ['from', 'to', 'page', 'limit', 'visitor', 'level'];
-    private const WAIT_OPTIONS = ['timeout', 'interval'];
 
     /**
      * @param string $baseUrl versioned base URL, e.g. `https://us.api.fingerly.io/api/v1`
@@ -31,8 +27,9 @@ final class Events
     /**
      * Fetches one event by request id.
      *
-     * @throws ApiException        `404 event_not_found` if it is not stored yet; use
-     *                             {@see self::waitFor()} to wait for a fresh identification
+     * @throws ApiException        `404 event_not_found` when there is no such event. One is
+     *                             readable as soon as identification answers, so this means a
+     *                             request id that was never issued
      * @throws TimeoutException
      * @throws ConnectionException
      */
@@ -89,48 +86,6 @@ final class Events
         }
 
         return EventPage::fromArray($this->read($path));
-    }
-
-    /**
-     * Polls until a newly identified event becomes readable.
-     *
-     * Identification answers before the event is archived, so reach for this
-     * only when you have just identified a visitor. Only a structured
-     * `404 event_not_found` is retried; every other failure propagates at once.
-     *
-     * @param array{timeout?: float|int, interval?: float|int} $options
-     *
-     * @throws TimeoutException       with `event_wait`, keeping the last {@see ApiException}
-     *                                as its previous, if the event is still missing at the deadline
-     * @throws ConfigurationException if a timeout or interval is not a positive number
-     */
-    public function waitFor(string $requestId, array $options = []): Event
-    {
-        Config::rejectUnknown($options, self::WAIT_OPTIONS);
-        $timeout = Config::positiveNumber($options['timeout'] ?? self::DEFAULT_WAIT_TIMEOUT, 'timeout');
-        $interval = Config::positiveNumber($options['interval'] ?? self::DEFAULT_POLL_INTERVAL, 'interval');
-
-        // A monotonic clock, so the loop is not confused by an NTP step.
-        $deadline = hrtime(true) + (int) ($timeout * 1e9);
-        $lastMiss = null;
-
-        while (true) {
-            try {
-                return $this->get($requestId);
-            } catch (ApiException $e) {
-                if (!$e->isEventNotFound()) {
-                    throw $e;
-                }
-                // Keep the reason polling continued, so the error that ends it
-                // says why rather than only that a deadline passed.
-                $lastMiss = $e;
-            }
-
-            if (hrtime(true) + (int) ($interval * 1e9) >= $deadline) {
-                throw new TimeoutException(TimeoutException::OPERATION_EVENT_WAIT, $lastMiss);
-            }
-            usleep((int) ($interval * 1e6));
-        }
     }
 
     /**
