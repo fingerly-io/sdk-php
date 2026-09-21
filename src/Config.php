@@ -19,14 +19,14 @@ final class Config
     public const KEY_SECRET = 'sk';
     public const KEY_PROXY = 'px';
 
+    /** The one Fingerly API origin. */
+    public const DEFAULT_ENDPOINT = 'https://api.fingerly.io';
+
     /**
      * `$` in PCRE also matches before a trailing newline, so the pattern is
      * anchored with \z instead. A key with a newline on the end is not a key.
      */
     private const KEY_PATTERN = '/\Afly_(pk|sk|px)_(production|staging|development)_[A-Za-z0-9_-]+\z/';
-
-    /** The one Fingerly API origin. */
-    public const DEFAULT_ENDPOINT = 'https://api.fingerly.io';
 
     private const API_VERSION_PATTERN = '/\Av[1-9][0-9]*\z/';
 
