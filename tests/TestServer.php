@@ -16,9 +16,9 @@ namespace Fingerly\Tests;
 final class TestServer
 {
     /** A secret key of the right shape. It is not a credential for anything. */
-    public const SECRET_KEY = 'fly_sk_us_production_testonlysecret';
-    public const PUBLIC_KEY = 'fly_pk_us_production_testonlypublic';
-    public const PROXY_KEY = 'fly_px_us_production_testonlyproxy';
+    public const SECRET_KEY = 'fly_sk_production_testonlysecret';
+    public const PUBLIC_KEY = 'fly_pk_production_testonlypublic';
+    public const PROXY_KEY = 'fly_px_production_testonlyproxy';
     public const WEBHOOK_SECRET = 'whsec_testonly';
 
     private readonly string $dir;

@@ -183,8 +183,7 @@ final class ProxyTest extends TestCase
             '',
             TestServer::SECRET_KEY,
             TestServer::PROXY_KEY,
-            'fly_pk_eu_production_otherregion',
-            'fly_pk_us_staging_otherenvironment',
+            'fly_pk_staging_otherenvironment',
             'not-a-key',
         ] as $presented) {
             $request = $this->identify('/metrics/api/v1/identify', ['x-api-key' => $presented]);

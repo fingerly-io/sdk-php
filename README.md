@@ -16,8 +16,8 @@ $event = $fingerly->events->get($requestId);
 $page = $fingerly->events->list(['level' => 'high', 'limit' => 50]);
 ```
 
-Event reads require `fly_sk_{eu|us}_{production|staging|development}_…` keys.
-The key selects the regional endpoint; the `endpoint` option overrides it for a
+Event reads require `fly_sk_{production|staging|development}_…` keys. Requests
+go to `https://api.fingerly.io`; the `endpoint` option overrides that for a
 local API. Public, proxy, management, malformed and unsupported keys are
 rejected before network access. Requests do not follow redirects. `get` and
 `list` each perform one request and never retry.
@@ -228,8 +228,8 @@ It forwards only `POST` to `{prefix}/api/v1/identify` and
 any other method gets `405`. Event reads need a secret key and stay unreachable
 from a browser by construction.
 
-The browser must present a public key from the same region and environment as
-the proxy key, or the request gets `401`. Bodies over 1 MiB get `413`. A
+The browser must present a public key from the same environment as the proxy
+key, or the request gets `401`. Bodies over 1 MiB get `413`. A
 Fingerly that stalls or cannot be reached gets `502` after 5 seconds rather
 than holding the browser's connection open. Responses are marked `no-store`.
 Only the content type, the visitor metadata Fingerly needs, and an

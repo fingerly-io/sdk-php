@@ -14,7 +14,7 @@ final class Events
     private const LIST_OPTIONS = ['from', 'to', 'page', 'limit', 'visitor', 'level'];
 
     /**
-     * @param string $baseUrl versioned base URL, e.g. `https://us.api.fingerly.io/api/v1`
+     * @param string $baseUrl versioned base URL, e.g. `https://api.fingerly.io/api/v1`
      *
      * @internal
      */

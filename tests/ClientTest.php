@@ -31,12 +31,11 @@ final class ClientTest extends TestCase
         $keys = [
             TestServer::PUBLIC_KEY,
             TestServer::PROXY_KEY,
-            'fly_mk_us_production_management',
-            'fly_sk_ap_production_wrongregion',
-            'fly_sk_us_testing_wrongenvironment',
-            'fly_sk_us_production_',
-            'fly_sk_us_production_has spaces',
-            "fly_sk_us_production_trailing\n",
+            'fly_mk_production_management',
+            'fly_sk_testing_wrongenvironment',
+            'fly_sk_production_',
+            'fly_sk_production_has spaces',
+            "fly_sk_production_trailing\n",
             'sk_us_production_missingprefix',
             '',
         ];
@@ -51,9 +50,9 @@ final class ClientTest extends TestCase
         }
     }
 
-    public function testAcceptsASecretKeyForEitherRegion(): void
+    public function testAcceptsASecretKeyForEveryEnvironment(): void
     {
-        foreach (['fly_sk_us_production_abc', 'fly_sk_eu_staging_abc-DEF_123', 'fly_sk_eu_development_abc'] as $key) {
+        foreach (['fly_sk_production_abc', 'fly_sk_staging_abc-DEF_123', 'fly_sk_development_abc'] as $key) {
             self::assertInstanceOf(Client::class, new Client($key));
         }
     }

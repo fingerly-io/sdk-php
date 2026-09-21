@@ -80,7 +80,7 @@ final class Proxy
     /** Proxy keys authenticate the browser's public key; secret keys do not. */
     private readonly bool $usesProxyKey;
 
-    /** @var array{region: string, environment: string} matched against the browser's key */
+    /** @var array{environment: string} matched against the browser's key */
     private readonly array $scope;
 
     private readonly string $upstream;
@@ -132,7 +132,7 @@ final class Proxy
 
         $upstream = $options['upstream'] ?? null;
         $this->upstream = Config::normalizeOrigin(
-            is_string($upstream) ? $upstream : Config::regionalOrigin($this->scope),
+            is_string($upstream) ? $upstream : Config::DEFAULT_ENDPOINT,
         );
         $apiVersion = $options['api_version'] ?? null;
         $this->apiVersion = Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null);
@@ -269,8 +269,8 @@ final class Proxy
      * Decides which key to present upstream.
      *
      * With a proxy key the browser must supply a public key for the same
-     * region and environment, which the proxy forwards alongside its own. The
-     * deprecated secret-key mode authenticates on its own and accepts anything.
+     * environment, which the proxy forwards alongside its own. The deprecated
+     * secret-key mode authenticates on its own and accepts anything.
      */
     private function upstreamKeyFor(string $presented): ?string
     {

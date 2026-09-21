@@ -23,7 +23,10 @@ final class Config
      * `$` in PCRE also matches before a trailing newline, so the pattern is
      * anchored with \z instead. A key with a newline on the end is not a key.
      */
-    private const KEY_PATTERN = '/\Afly_(pk|sk|px)_(eu|us)_(production|staging|development)_[A-Za-z0-9_-]+\z/';
+    private const KEY_PATTERN = '/\Afly_(pk|sk|px)_(production|staging|development)_[A-Za-z0-9_-]+\z/';
+
+    /** The one Fingerly API origin. */
+    public const DEFAULT_ENDPOINT = 'https://api.fingerly.io';
 
     private const API_VERSION_PATTERN = '/\Av[1-9][0-9]*\z/';
 
@@ -38,7 +41,7 @@ final class Config
      *
      * @param 'pk'|'px'|'sk' $expected
      *
-     * @return array{region: string, environment: string} the scope the key is bound to
+     * @return array{environment: string} the scope the key is bound to
      *
      * @throws ConfigurationException if the key is malformed or of another kind
      */
@@ -46,21 +49,11 @@ final class Config
     {
         if (1 !== preg_match(self::KEY_PATTERN, $key, $match) || $match[1] !== $expected) {
             throw new ConfigurationException(
-                sprintf('A valid regional Fingerly %s key is required', self::KEY_LABELS[$expected]),
+                sprintf('A valid Fingerly %s key is required', self::KEY_LABELS[$expected]),
             );
         }
 
-        return ['region' => $match[2], 'environment' => $match[3]];
-    }
-
-    /**
-     * Returns the Fingerly API origin serving a key's region.
-     *
-     * @param array{region: string, environment: string} $scope
-     */
-    public static function regionalOrigin(array $scope): string
-    {
-        return 'https://'.$scope['region'].'.api.fingerly.io';
+        return ['environment' => $match[2]];
     }
 
     /**

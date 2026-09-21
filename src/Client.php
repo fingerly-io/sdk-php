@@ -36,8 +36,8 @@ final class Client
     public readonly Events $events;
 
     /**
-     * @param string               $secretKey a server-only key, `fly_sk_{eu|us}_{environment}_…`, whose prefix
-     *                                        selects the regional API and the environment read
+     * @param string               $secretKey a server-only key, `fly_sk_{environment}_…`, whose prefix
+     *                                        names the environment read
      * @param array<string, mixed> $options   endpoint, api_version, timeout, http_client, request_factory,
      *                                        stream_factory
      *
@@ -49,10 +49,10 @@ final class Client
 
         // Validate the key even when an endpoint is given, so a public, proxy
         // or management key can never reach an API that would accept it.
-        $scope = Config::parseKey($secretKey, Config::KEY_SECRET);
+        Config::parseKey($secretKey, Config::KEY_SECRET);
         $endpoint = $options['endpoint'] ?? null;
         $origin = Config::normalizeOrigin(
-            is_string($endpoint) ? $endpoint : Config::regionalOrigin($scope),
+            is_string($endpoint) ? $endpoint : Config::DEFAULT_ENDPOINT,
         );
         $apiVersion = $options['api_version'] ?? null;
         $apiVersion = Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null);
