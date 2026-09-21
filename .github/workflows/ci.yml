@@ -68,9 +68,9 @@ jobs:
                 signature: "sha256=".hash_hmac("sha256", time().".{}", "whsec_x"),
             );
             if (!$ok) { fwrite(STDERR, "verification failed\n"); exit(1); }
-            new Fingerly\Client("fly_sk_us_production_ci");
+            new Fingerly\Client("fly_sk_production_ci");
             new Fingerly\Proxy([
-                "proxy_key" => "fly_px_us_production_ci",
+                "proxy_key" => "fly_px_production_ci",
                 "client_ip" => fn ($r) => "203.0.113.7",
             ]);
             echo "the dependency-free build works", PHP_EOL;
