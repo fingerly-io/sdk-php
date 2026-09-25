@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fingerly\Proxy;
 
+use Fingerly\ConfigurationException;
 use Fingerly\Proxy;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -11,17 +12,18 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Mounts the proxy as Laravel middleware.
  *
- * Resolve the {@see Proxy} in a service provider and append the middleware:
+ * Resolve the {@see Proxy} in a service provider, with the `path` the dashboard
+ * issued, and append the middleware:
  *
  * ```php
  * // bootstrap/app.php (Laravel 11) or app/Http/Kernel.php (Laravel 10)
  * $middleware->append(\Fingerly\Proxy\LaravelMiddleware::class);
  * ```
  *
- * It matches on `$request->getPathInfo()`, which is the path relative to the
- * application, never the whole URI: a deployment under a sub-URI carries a
- * prefix the configuration knows nothing about.
- *
+ * It matches that one path against `$request->getPathInfo()`, which is the
+ * path relative to the application, never the whole URI: a deployment under a
+ * sub-URI carries a prefix the configuration knows nothing about. Every other
+ * request goes on to the application.
  *
  * Symfony's `ResponseHeaderBag` appends `private` to any `Cache-Control`
  * without a visibility directive, so the relayed `no-store` arrives as
@@ -31,7 +33,16 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class LaravelMiddleware
 {
-    public function __construct(private readonly Proxy $proxy) {}
+    /**
+     * @throws ConfigurationException if the proxy has no `path`: middleware
+     *                                sees every request, so without one it would answer them all
+     */
+    public function __construct(private readonly Proxy $proxy)
+    {
+        if (null === $proxy->path()) {
+            throw new ConfigurationException('LaravelMiddleware needs a Proxy with the path the dashboard issued');
+        }
+    }
 
     /**
      * @param \Closure(Request): Response $next

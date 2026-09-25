@@ -164,15 +164,17 @@ that does nothing else pulls in nothing else.
 ## Same-origin proxy
 
 Content blockers refuse browser requests to third-party APIs, and a refused
-identification is a visitor never identified. Mount the proxy on a path of your
-own site and those requests become first-party. The proxy key is what lets that
-hop declare the visitor's real address, origin and user agent; a public key
-alone never can, so nobody can spoof them.
+identification is a visitor never identified. Serving the browser SDK from a
+path on your own site makes those requests first-party. Create a proxy in the
+dashboard (**Integration > Proxy keys**) and mount the proxy at the path it
+issued, here `/k7x2qm4a`. The proxy key is what lets that hop declare the
+visitor's real address, origin and user agent; a public key alone never can, so
+nobody can spoof them.
 
 ```php
 $proxy = new \Fingerly\Proxy([
     'proxy_key' => getenv('FINGERLY_PROXY_KEY'),
-    'prefix' => '/metrics',
+    'path' => '/k7x2qm4a',
     'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip'),
 ]);
 ```
@@ -194,8 +196,10 @@ $middleware->append(\Fingerly\Proxy\LaravelMiddleware::class);
 Then point the browser SDK at the same path:
 
 ```ts
-const fingerly = await load({ apiKey: 'fly_pk_…', endpoints: '/metrics' })
+const fingerly = await load({ apiKey: 'fly_pk_…', endpoints: '/k7x2qm4a' })
 ```
+
+The SDK posts both of its calls to exactly that path, with nothing appended.
 
 ### Any other framework
 
@@ -216,33 +220,52 @@ $response = $proxy->handle(new \Fingerly\Proxy\ProxyRequest(
 $proxy->handle(\Fingerly\Proxy\ProxyRequest::fromGlobals())->send();
 ```
 
-`$proxy->handles($request)` answers whether a request is one of the two the
-proxy owns, so everything else goes to your application untouched rather than
-getting a 404 of ours. `$proxy->maxBodyBytes()` is there so glue code can read
-no further than the limit.
+`$proxy->handles($request)` answers whether a request is the one the proxy
+owns, so everything else goes to your application untouched rather than getting
+a 404 of ours. `$proxy->maxBodyBytes()` is there so glue code can read no
+further than the limit.
+
+### The path
+
+`path` is optional in the core. Given one, the proxy answers that path and
+nothing else, matched exactly with trailing slashes ignored, so
+`/k7x2qm4a/admin` is not the proxy's. Left out, it answers whatever your
+framework routed to it, which suits a route that already names the path. It
+must start with `/` and carry no query or fragment; anything else is a
+`ConfigurationException`.
+
+The three adapters see every request, so each one refuses a `Proxy` without a
+`path` rather than answer them all, and there is no default to fall back on.
+The path is matched against the application-relative path: `getPathInfo()`
+under Laravel and Symfony, and the PSR-7 URI path under PSR-15. It is never the
+whole request URI, because a deployment under a sub-URI carries a prefix the
+configuration knows nothing about. Add the PSR-15 middleware to the whole
+application or to that one route, not under a path your router strips.
+
+Use the path the dashboard issued. Blockers look for words such as
+`fingerprint`, `tracking`, `analytics`, `collect`, `identify` and `fingerly`.
 
 ### What the proxy does
 
-It forwards only `POST` to `{prefix}/api/v1/identify` and
-`{prefix}/api/v1/events/{request_id}/supplement`. Anything else gets `404`, and
-any other method gets `405`. Event reads need a secret key and stay unreachable
-from a browser by construction.
+It forwards only `POST`; any other method gets `405`, and a path that is not the
+proxy's gets `404` first. Every request goes to one URL,
+`https://api.fingerly.io/api/v1/ingest`, which tells the identification and the
+deferred report apart by their bodies. `api_version` changes the version in
+that URL and nothing else, and `upstream` its origin. Event reads need a secret
+key and stay unreachable from a browser by construction.
 
 The browser must present a public key from the same environment as the proxy
 key, or the request gets `401`. Bodies over 1 MiB get `413`. A
 Fingerly that stalls or cannot be reached gets `502` after 5 seconds rather
-than holding the browser's connection open. Responses are marked `no-store`.
-Only the content type, the visitor metadata Fingerly needs, and an
-`Idempotency-Key` are forwarded; customer cookies and authorization headers
-never are.
+than holding the browser's connection open. Only the content type, the visitor
+metadata Fingerly needs, and an `Idempotency-Key` are forwarded; customer
+cookies and authorization headers never are. The proxy reports itself upstream
+as `php/0.1.0`, which the dashboard shows per proxy.
 
-`prefix` must match where you mount the adapter, and it is matched against the
-application-relative path — `getPathInfo()` under Laravel and Symfony, the
-PSR-7 URI path under PSR-15 — never the whole request URI, because a
-deployment under a sub-URI carries a prefix the configuration knows nothing
-about. Mounting under a router that strips the prefix also works: it is
-accepted as either present or already stripped. Choose a neutral path. Blockers
-look for words such as `fingerprint`, `tracking` and `fingerly`.
+Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining`
+and `Retry-After` are relayed back, plus `Cache-Control: no-store` set by the
+proxy. It is an allowlist, so nothing on the response names Fingerly, whatever
+the API adds in future.
 
 > **`client_ip` is the one thing you must get right.** Resolve it from a header
 > your own infrastructure sets, such as your load balancer's or CDN's. Never
@@ -283,4 +306,4 @@ bodies without trusting their shape. `Webhook.php` verifies signatures and
 needs nothing else in the package. `Proxy.php` is the same-origin core, with
 `Proxy/` holding its request and response types and the three adapters.
 `Config.php` validates every caller-supplied option: keys, origins, API
-versions, mount paths, durations and sizes, all before any network access.
+versions, the proxy path, durations and sizes, all before any network access.

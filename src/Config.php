@@ -131,18 +131,20 @@ final class Config
     }
 
     /**
-     * Validates the local mount path and drops trailing slashes.
+     * Validates the path the dashboard issued for a proxy and drops trailing
+     * slashes. It is matched exactly: the proxy answers that path and nothing
+     * under it.
      *
      * @throws ConfigurationException
      */
-    public static function normalizePrefix(string $value): string
+    public static function normalizePath(mixed $value): string
     {
-        $prefix = rtrim($value, '/');
-        if (!str_starts_with($prefix, '/') || str_contains($prefix, '?') || str_contains($prefix, '#')) {
-            throw new ConfigurationException('prefix must be an absolute URL path');
+        $path = is_string($value) ? rtrim(trim($value), '/') : '';
+        if (!str_starts_with($path, '/') || strlen($path) < 2 || str_contains($path, '?') || str_contains($path, '#')) {
+            throw new ConfigurationException('path must be an absolute URL path such as /k7x2qm4a');
         }
 
-        return $prefix;
+        return $path;
     }
 
     /**

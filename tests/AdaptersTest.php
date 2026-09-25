@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fingerly\Tests;
 
+use Fingerly\ConfigurationException;
 use Fingerly\Proxy;
 use Fingerly\Proxy\LaravelMiddleware;
 use Fingerly\Proxy\ProxyRequest;
@@ -34,6 +35,10 @@ use Symfony\Component\HttpKernel\KernelEvents;
 final class AdaptersTest extends TestCase
 {
     private const IDENTIFIED = '{"request_id":"req_1","visitor_id":"vis_1"}';
+    private const PATH = '/k7x2qm4a';
+
+    /** Paths that are not the proxy's, including one under it. */
+    private const OTHER_PATHS = ['/orders/42', self::PATH.'/admin', '/'];
 
     private ?TestServer $server = null;
 
@@ -48,20 +53,20 @@ final class AdaptersTest extends TestCase
         $this->server = null;
     }
 
-    public function testPsr15MiddlewareForwardsAnIdentify(): void
+    public function testPsr15MiddlewareForwardsToTheIngestUrl(): void
     {
         $factory = new Psr17Factory();
         $middleware = new Psr15Middleware($this->proxy(), $factory);
 
         $response = $middleware->process(
-            $this->psrRequest('/metrics/api/v1/identify'),
+            $this->psrRequest(self::PATH),
             $this->refusingHandler(),
         );
 
         self::assertSame(200, $response->getStatusCode());
         self::assertSame(self::IDENTIFIED, (string) $response->getBody());
         self::assertSame('no-store', $response->getHeaderLine('cache-control'));
-        self::assertSame('/api/v1/identify', $this->server?->first()['path']);
+        self::assertSame('/api/v1/ingest', $this->server?->first()['path']);
     }
 
     public function testPsr15MiddlewarePassesEverythingElseThrough(): void
@@ -69,22 +74,24 @@ final class AdaptersTest extends TestCase
         $factory = new Psr17Factory();
         $middleware = new Psr15Middleware($this->proxy(), $factory);
 
-        $response = $middleware->process(
-            $this->psrRequest('/orders/42'),
-            $this->applicationHandler($factory),
-        );
+        foreach (self::OTHER_PATHS as $path) {
+            $response = $middleware->process(
+                $this->psrRequest($path),
+                $this->applicationHandler($factory),
+            );
 
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('the application answered', (string) $response->getBody());
+            self::assertSame(200, $response->getStatusCode(), $path);
+            self::assertSame('the application answered', (string) $response->getBody(), $path);
+        }
         self::assertSame(0, $this->server?->requestCount());
     }
 
-    public function testLaravelMiddlewareForwardsAnIdentify(): void
+    public function testLaravelMiddlewareForwardsToTheIngestUrl(): void
     {
         $middleware = new LaravelMiddleware($this->proxy());
 
         $response = $middleware->handle(
-            $this->laravelRequest('/metrics/api/v1/identify'),
+            $this->laravelRequest(self::PATH),
             static fn (LaravelRequest $request): SymfonyResponse => new SymfonyResponse('not reached', 500),
         );
 
@@ -93,31 +100,33 @@ final class AdaptersTest extends TestCase
         // Symfony appends `private` to any Cache-Control without a visibility
         // directive. That is a narrowing, not a weakening, so it is left alone.
         self::assertStringContainsString('no-store', (string) $response->headers->get('cache-control'));
-        self::assertSame('/api/v1/identify', $this->server?->first()['path']);
+        self::assertSame('/api/v1/ingest', $this->server?->first()['path']);
     }
 
     public function testLaravelMiddlewarePassesEverythingElseThrough(): void
     {
         $middleware = new LaravelMiddleware($this->proxy());
 
-        $response = $middleware->handle(
-            $this->laravelRequest('/orders/42'),
-            static fn (LaravelRequest $request): SymfonyResponse => new SymfonyResponse('the application answered'),
-        );
+        foreach (self::OTHER_PATHS as $path) {
+            $response = $middleware->handle(
+                $this->laravelRequest($path),
+                static fn (LaravelRequest $request): SymfonyResponse => new SymfonyResponse('the application answered'),
+            );
 
-        self::assertSame('the application answered', $response->getContent());
+            self::assertSame('the application answered', $response->getContent(), $path);
+        }
         self::assertSame(0, $this->server?->requestCount());
     }
 
     /**
      * Laravel and Symfony both put a sub-URI mount into the base URL, so
-     * getPathInfo() is the only path the configured prefix can match.
+     * getPathInfo() is the only path the configured path can match.
      */
     public function testLaravelMiddlewareMatchesUnderASubUri(): void
     {
         $middleware = new LaravelMiddleware($this->proxy());
 
-        $request = LaravelRequest::create('/shop/metrics/api/v1/identify', 'POST', [], [], [], [
+        $request = LaravelRequest::create('/shop/k7x2qm4a', 'POST', [], [], [], [
             'SCRIPT_FILENAME' => '/var/www/shop/index.php',
             'SCRIPT_NAME' => '/shop/index.php',
             'PHP_SELF' => '/shop/index.php',
@@ -125,20 +134,20 @@ final class AdaptersTest extends TestCase
             'CONTENT_TYPE' => 'application/json',
         ], '{"signals":{}}');
 
-        self::assertSame('/metrics/api/v1/identify', $request->getPathInfo());
+        self::assertSame(self::PATH, $request->getPathInfo());
         $response = $middleware->handle(
             $request,
             static fn (LaravelRequest $r): SymfonyResponse => new SymfonyResponse('not reached', 500),
         );
 
         self::assertSame(200, $response->getStatusCode());
-        self::assertSame('/api/v1/identify', $this->server?->first()['path']);
+        self::assertSame('/api/v1/ingest', $this->server?->first()['path']);
     }
 
-    public function testSymfonyListenerForwardsAnIdentify(): void
+    public function testSymfonyListenerForwardsToTheIngestUrl(): void
     {
         $listener = new SymfonyListener($this->proxy());
-        $event = $this->symfonyEvent('/metrics/api/v1/identify');
+        $event = $this->symfonyEvent(self::PATH);
 
         $listener->onKernelRequest($event);
 
@@ -146,17 +155,18 @@ final class AdaptersTest extends TestCase
         self::assertInstanceOf(SymfonyResponse::class, $response);
         self::assertSame(200, $response->getStatusCode());
         self::assertSame(self::IDENTIFIED, $response->getContent());
-        self::assertSame('/api/v1/identify', $this->server?->first()['path']);
+        self::assertSame('/api/v1/ingest', $this->server?->first()['path']);
     }
 
     public function testSymfonyListenerLeavesEverythingElseToTheRouter(): void
     {
         $listener = new SymfonyListener($this->proxy());
-        $event = $this->symfonyEvent('/orders/42');
 
-        $listener->onKernelRequest($event);
-
-        self::assertNull($event->getResponse());
+        foreach (self::OTHER_PATHS as $path) {
+            $event = $this->symfonyEvent($path);
+            $listener->onKernelRequest($event);
+            self::assertNull($event->getResponse(), $path);
+        }
         self::assertSame(0, $this->server?->requestCount());
     }
 
@@ -164,7 +174,7 @@ final class AdaptersTest extends TestCase
     public function testSymfonyListenerIgnoresSubRequests(): void
     {
         $listener = new SymfonyListener($this->proxy());
-        $event = $this->symfonyEvent('/metrics/api/v1/identify', HttpKernelInterface::SUB_REQUEST);
+        $event = $this->symfonyEvent(self::PATH, HttpKernelInterface::SUB_REQUEST);
 
         $listener->onKernelRequest($event);
 
@@ -172,7 +182,7 @@ final class AdaptersTest extends TestCase
         self::assertSame(0, $this->server?->requestCount());
     }
 
-    /** It answers before routing, so the proxy's paths need no route. */
+    /** It answers before routing, so the proxy's path needs no route. */
     public function testSymfonyListenerRunsBeforeTheRouter(): void
     {
         $events = SymfonyListener::getSubscribedEvents();
@@ -181,13 +191,40 @@ final class AdaptersTest extends TestCase
         self::assertGreaterThan(32, $events[KernelEvents::REQUEST][1]);
     }
 
+    /**
+     * Every adapter sees every request, so a proxy without a path would answer
+     * them all. There is no default path to fall back on.
+     */
+    public function testEveryAdapterRequiresAPath(): void
+    {
+        self::assertNotNull($this->server);
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'upstream' => $this->server->baseUrl(),
+            'client_ip' => static fn (ProxyRequest $request): string => '203.0.113.7',
+        ]);
+
+        foreach ([
+            static fn () => new Psr15Middleware($proxy, new Psr17Factory()),
+            static fn () => new LaravelMiddleware($proxy),
+            static fn () => new SymfonyListener($proxy),
+        ] as $mount) {
+            try {
+                $mount();
+                self::fail('an adapter accepted a proxy without a path');
+            } catch (ConfigurationException $e) {
+                self::assertStringContainsString('path', $e->getMessage());
+            }
+        }
+    }
+
     private function proxy(): Proxy
     {
         self::assertNotNull($this->server);
 
         return new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
-            'prefix' => '/metrics',
+            'path' => self::PATH,
             'upstream' => $this->server->baseUrl(),
             'client_ip' => static fn (ProxyRequest $request): string => '203.0.113.7',
         ]);

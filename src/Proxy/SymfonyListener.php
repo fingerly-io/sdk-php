@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fingerly\Proxy;
 
+use Fingerly\ConfigurationException;
 use Fingerly\Proxy;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\Request;
@@ -12,7 +13,8 @@ use Symfony\Component\HttpKernel\Event\RequestEvent;
 use Symfony\Component\HttpKernel\KernelEvents;
 
 /**
- * Mounts the proxy as a Symfony kernel listener.
+ * Mounts the proxy as a Symfony kernel listener, at the `path` the dashboard
+ * issued, which the {@see Proxy} must be given.
  *
  * ```yaml
  * # config/services.yaml
@@ -20,10 +22,10 @@ use Symfony\Component\HttpKernel\KernelEvents;
  *     arguments: ['@fingerly.proxy']
  * ```
  *
- * It answers during `kernel.request`, before routing, so the proxy's paths
- * need no route of their own. It matches on `$request->getPathInfo()`, which
- * is the path relative to the application, never the whole URI.
- *
+ * It answers during `kernel.request`, before routing, so the proxy's path
+ * needs no route of its own. It matches that one path against
+ * `$request->getPathInfo()`, which is the path relative to the application,
+ * never the whole URI. Every other request goes on to the router.
  *
  * Symfony's `ResponseHeaderBag` appends `private` to any `Cache-Control`
  * without a visibility directive, so the relayed `no-store` arrives as
@@ -33,7 +35,16 @@ use Symfony\Component\HttpKernel\KernelEvents;
  */
 final class SymfonyListener implements EventSubscriberInterface
 {
-    public function __construct(private readonly Proxy $proxy) {}
+    /**
+     * @throws ConfigurationException if the proxy has no `path`: the listener
+     *                                sees every request, so without one it would answer them all
+     */
+    public function __construct(private readonly Proxy $proxy)
+    {
+        if (null === $proxy->path()) {
+            throw new ConfigurationException('SymfonyListener needs a Proxy with the path the dashboard issued');
+        }
+    }
 
     /**
      * @return array<string, array{string, int}>
