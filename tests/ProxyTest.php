@@ -76,6 +76,7 @@ final class ProxyTest extends TestCase
             ['max_body_bytes' => 0],
             ['timeout' => 0],
             ['upstream' => 'https://user:pass@example.com'],
+            ['on_error' => 'not callable'],
             ['prefix' => '/k7x2qm4a'],
         ] as $override) {
             try {
@@ -383,28 +384,73 @@ final class ProxyTest extends TestCase
      * The documented behaviour is to give Fingerly its deadline and then
      * answer, not to hold the browser's connection open.
      */
-    public function testAnswers502WhenTheUpstreamStalls(): void
+    public function testAnswers504WhenTheUpstreamStalls(): void
     {
         $this->server = TestServer::always(200, self::IDENTIFIED, [], 5.0);
-        $proxy = new Proxy([
-            'proxy_key' => TestServer::PROXY_KEY,
-            'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
-            'timeout' => 0.3,
-            'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
-        ]);
+        $lines = [];
+        $proxy = $this->failingProxy($this->server->baseUrl(), $lines);
 
-        self::assertSame(502, $proxy->handle($this->identify(self::PATH))->status);
+        $started = microtime(true);
+        $response = $proxy->handle($this->identify(self::PATH));
+
+        self::assertLessThan(2.0, microtime(true) - $started);
+        $this->assertGatewayFailure($response, 504, 'Gateway timeout');
+        self::assertSame(['fingerly proxy: upstream timed out after 0.3s'], $lines);
+    }
+
+    /**
+     * One deadline covers the whole exchange, body included, so an upstream
+     * that keeps sending a byte at a time cannot stretch it.
+     */
+    public function testATricklingUpstreamCannotExtendTheDeadline(): void
+    {
+        $this->server = TestServer::start([[
+            'status' => 200, 'body' => str_repeat(' ', 40).self::IDENTIFIED, 'trickle' => 0.05,
+        ]]);
+        $lines = [];
+        $proxy = $this->failingProxy($this->server->baseUrl(), $lines);
+
+        $started = microtime(true);
+        $response = $proxy->handle($this->identify(self::PATH));
+
+        self::assertLessThan(1.5, microtime(true) - $started);
+        $this->assertGatewayFailure($response, 504, 'Gateway timeout');
     }
 
     public function testAnswers502WhenTheUpstreamIsUnreachable(): void
     {
+        $lines = [];
+        // Port 1 is reserved and nothing listens on it.
+        $proxy = $this->failingProxy('http://127.0.0.1:1', $lines);
+
+        $this->assertGatewayFailure($proxy->handle($this->identify(self::PATH)), 502, 'Bad gateway');
+        self::assertCount(1, $lines);
+        self::assertStringStartsWith('fingerly proxy: upstream request failed: ', $lines[0]);
+        self::assertStringNotContainsString("\n", $lines[0]);
+    }
+
+    /** A success the browser cannot read is not relayed as one. */
+    public function testAnswers502WhenASuccessIsNotJson(): void
+    {
+        $this->server = TestServer::always(200, '{"request_id": "req_1", oops');
+        $lines = [];
+        $proxy = $this->failingProxy($this->server->baseUrl(), $lines);
+
+        $this->assertGatewayFailure($proxy->handle($this->identify(self::PATH)), 502, 'Bad gateway');
+        self::assertSame(['fingerly proxy: upstream answered 200 with a body that is not JSON'], $lines);
+    }
+
+    /** Logging is the integration's business; a hook that throws changes nothing. */
+    public function testAThrowingErrorHookDoesNotChangeTheAnswer(): void
+    {
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            // Port 1 is reserved and nothing listens on it.
             'upstream' => 'http://127.0.0.1:1',
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
+            'on_error' => static function (string $line): void {
+                throw new \RuntimeException('the logger is down');
+            },
         ]);
 
         self::assertSame(502, $proxy->handle($this->identify(self::PATH))->status);
@@ -471,6 +517,38 @@ final class ProxyTest extends TestCase
         ob_start();
         $response->send();
         self::assertSame('', (string) ob_get_clean());
+    }
+
+    /**
+     * A proxy with a short deadline that records what it reports.
+     *
+     * @param list<string> $lines
+     */
+    private function failingProxy(string $upstream, array &$lines): Proxy
+    {
+        return new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => $upstream,
+            'timeout' => 0.3,
+            'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
+            'on_error' => static function (string $line) use (&$lines): void {
+                $lines[] = $line;
+            },
+        ]);
+    }
+
+    /** A short plain-text answer that is never cached and names nobody. */
+    private function assertGatewayFailure(ProxyResponse $response, int $status, string $body): void
+    {
+        self::assertSame($status, $response->status);
+        self::assertSame($body, $response->body);
+        self::assertSame('no-store', $response->headers['cache-control'] ?? null);
+        self::assertSame('text/plain; charset=utf-8', $response->headers['content-type'] ?? null);
+        foreach ($response->headers as $name => $value) {
+            self::assertStringNotContainsStringIgnoringCase('fingerly', $name.': '.$value);
+        }
+        self::assertStringNotContainsStringIgnoringCase('fingerly', $response->body);
     }
 
     private function proxy(): Proxy

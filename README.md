@@ -257,9 +257,20 @@ that URL and nothing else, and `upstream` its origin. Event reads need a secret
 key and stay unreachable from a browser by construction.
 
 The browser must present a public key from the same environment as the proxy
-key, or the request gets `401`. Bodies over 1 MiB get `413`. A
-Fingerly that stalls or cannot be reached gets `502` after 5 seconds rather
-than holding the browser's connection open. Only the content type, the visitor
+key, or the request gets `401`. Bodies over 1 MiB get `413`. One 5 second
+deadline covers the whole exchange, so an upstream that never answers, or
+answers a byte at a time, gets `504 Gateway timeout` rather than holding the
+browser's connection open. An upstream that cannot be reached, drops the
+connection, or answers a success that is not JSON gets `502 Bad gateway`. Both
+are short `text/plain` answers marked `no-store`, and the proxy never throws,
+so the framework never renders its own error page in their place. Pass
+`on_error` to hear about them, one line each:
+
+```php
+'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),
+```
+
+Only the content type, the visitor
 metadata Fingerly needs, and an `Idempotency-Key` are forwarded; customer
 cookies and authorization headers never are. The proxy reports itself upstream
 as `php/0.1.0`, which the dashboard shows per proxy.

@@ -249,6 +249,24 @@ final class ClientTest extends TestCase
     }
 
     /** An unreachable API is a connection failure, not a malformed response. */
+    /** An API that keeps sending a byte at a time still hits the one deadline. */
+    public function testATricklingResponseCannotExtendTheDeadline(): void
+    {
+        $this->server = TestServer::start([[
+            'status' => 200, 'body' => str_repeat(' ', 40).'{"rows":[],"page":1,"page_size":5}', 'trickle' => 0.05,
+        ]]);
+        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'timeout' => 0.3]);
+
+        $started = microtime(true);
+
+        try {
+            $fingerly->events->list();
+            self::fail('the read should have timed out');
+        } catch (TimeoutException) {
+            self::assertLessThan(1.5, microtime(true) - $started);
+        }
+    }
+
     public function testReportsAnUnreachableApiAsAConnectionFailure(): void
     {
         // Port 1 is reserved and nothing listens on it.

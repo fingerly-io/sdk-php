@@ -52,6 +52,7 @@ final class Proxy
         'http_client',
         'request_factory',
         'stream_factory',
+        'on_error',
     ];
 
     /** What this proxy reports itself as upstream; shown per proxy in the dashboard. */
@@ -96,12 +97,19 @@ final class Proxy
     /** @var callable(ProxyRequest): string */
     private $clientIp;
 
+    /** @var null|callable(string): void */
+    private $onError;
+
+    private readonly float $timeout;
+
     /**
      * @param array<string, mixed> $options `proxy_key` and `client_ip` are required; `client_ip`
      *                                      is a `callable(ProxyRequest): string`. The rest are
      *                                      `path`, `api_version`, `upstream`, `max_body_bytes`,
-     *                                      `timeout`, and a PSR-18 `http_client` with its
-     *                                      `request_factory` and `stream_factory`. It is
+     *                                      `timeout`, `on_error` (a `callable(string): void`
+     *                                      given one line per upstream failure), and a PSR-18
+     *                                      `http_client` with its `request_factory` and
+     *                                      `stream_factory`. It is
      *                                      deliberately not a shape: these come from environment
      *                                      variables and config files, where every value is
      *                                      `mixed`, and validating them here is the point. An
@@ -147,7 +155,13 @@ final class Proxy
             'max_body_bytes',
         );
         $timeout = Config::positiveNumber($options['timeout'] ?? self::DEFAULT_TIMEOUT, 'timeout');
+        $this->timeout = $timeout;
         $this->clientIp = $clientIp;
+        $onError = $options['on_error'] ?? null;
+        if (null !== $onError && !is_callable($onError)) {
+            throw new ConfigurationException('on_error must be callable');
+        }
+        $this->onError = $onError;
 
         $this->transport = new Transport(
             timeout: $timeout,
@@ -227,15 +241,51 @@ final class Proxy
             return self::refuse(500, 'Internal Server Error');
         }
 
+        // Give Fingerly its deadline and then answer, rather than holding the
+        // browser's connection open, and never let upstream trouble surface
+        // as an exception the framework would turn into its own 500 page.
         try {
             $response = $this->transport->send('POST', $this->upstreamUrl, $headers, $body);
-        } catch (ConnectionException|TimeoutException) {
-            // Give Fingerly its deadline and then answer, rather than holding
-            // the browser's connection open.
-            return self::refuse(502, 'Bad Gateway');
+        } catch (TimeoutException) {
+            $this->report(sprintf('upstream timed out after %ss', $this->timeout));
+
+            return self::refuse(504, 'Gateway timeout');
+        } catch (ConnectionException $e) {
+            $this->report('upstream request failed: '.$e->getMessage());
+
+            return self::refuse(502, 'Bad gateway');
+        }
+
+        // A success the browser cannot read would be shown as a wrong result
+        // rather than retried, so a 2xx must carry the JSON it promises.
+        $status = $response['status'];
+        if ($status >= 200 && $status < 300 && '' !== $response['body']
+            && !in_array($status, self::BODILESS_STATUSES, true)
+            && null === json_decode($response['body'], true)) {
+            $this->report(sprintf('upstream answered %d with a body that is not JSON', $status));
+
+            return self::refuse(502, 'Bad gateway');
         }
 
         return $this->relay($response);
+    }
+
+    /**
+     * Hands one concise line about an upstream failure to the integration's
+     * `on_error` hook, if it set one. A hook that throws is ignored: logging
+     * must never change the answer the browser gets.
+     */
+    private function report(string $line): void
+    {
+        if (null === $this->onError) {
+            return;
+        }
+
+        try {
+            ($this->onError)('fingerly proxy: '.str_replace(["\r", "\n"], ' ', $line));
+        } catch (\Throwable) {
+            // Deliberately ignored.
+        }
     }
 
     /**

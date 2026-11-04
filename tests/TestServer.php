@@ -224,6 +224,19 @@ final class TestServer
             foreach ($canned['headers'] ?? [] as $name => $value) {
                 header($name.': '.$value, true);
             }
+            if (($canned['trickle'] ?? 0) > 0) {
+                // One byte at a time, each well inside any per-read timeout,
+                // so only an overall deadline can stop it.
+                $body = (string) ($canned['body'] ?? '');
+                header('content-length: '.strlen($body));
+                foreach (str_split($body) as $byte) {
+                    echo $byte;
+                    flush();
+                    usleep((int) ($canned['trickle'] * 1_000_000));
+                }
+
+                return;
+            }
             echo $canned['body'] ?? '';
             PHP;
     }
