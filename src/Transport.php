@@ -35,6 +35,18 @@ final class Transport
     private readonly ?object $streamFactory;
 
     /**
+     * One cURL handle for the life of this transport, so its connection cache
+     * keeps the upstream connection open between requests. A handle per
+     * request opens a new TCP (and TLS) connection every time and leaves each
+     * one in TIME_WAIT, which exhausts the host's ephemeral ports at a few
+     * hundred requests a second.
+     */
+    private ?\CurlHandle $handle = null;
+
+    /** The process-wide connection cache on PHP 8.5+, or null before it. */
+    private ?object $share = null;
+
+    /**
      * @param float       $timeout   deadline covering the request and reading its body
      * @param null|string $redactKey a credential to strip from anything an error carries
      */
@@ -112,10 +124,10 @@ final class Transport
             throw new ConnectionException('fingerly: a request needs a method and a URL');
         }
 
-        $handle = curl_init();
-        if (false === $handle) {
-            throw new ConnectionException('fingerly: could not initialise an HTTP handle');
-        }
+        $handle = $this->handle();
+        // Start from a clean handle even if an earlier call left options
+        // behind; curl_reset() keeps the connection cache.
+        curl_reset($handle);
 
         $lines = [];
         foreach ($headers as $name => $value) {
@@ -136,6 +148,13 @@ final class Transport
             \CURLOPT_FOLLOWLOCATION => false,
             \CURLOPT_HEADERFUNCTION => static function ($_handle, string $line) use (&$received): int {
                 $length = strlen($line);
+                if (str_starts_with($line, 'HTTP/')) {
+                    // A new status line (after a 100 Continue, say) starts a
+                    // new header block; only the final response's count.
+                    $received = [];
+
+                    return $length;
+                }
                 $parts = explode(':', $line, 2);
                 if (2 === count($parts)) {
                     $received[strtolower(trim($parts[0]))] = trim($parts[1]);
@@ -148,13 +167,20 @@ final class Transport
             $options[\CURLOPT_POSTFIELDS] = $body;
         }
         curl_setopt_array($handle, $options);
+        if (null !== $this->share) {
+            // A CurlSharePersistentHandle, which PHP 8.5 added and the 8.1
+            // stubs this is analysed against do not know.
+            curl_setopt($handle, \CURLOPT_SHARE, $this->share); // @phpstan-ignore argument.type
+        }
 
         $response = curl_exec($handle);
         $errno = curl_errno($handle);
         $error = curl_error($handle);
         $status = (int) curl_getinfo($handle, \CURLINFO_RESPONSE_CODE);
-        // No curl_close(): since PHP 8.0 the handle is an object the garbage
-        // collector frees, and calling it is deprecated from 8.5.
+        // Drop the per-request options (headers, body, the header callback and
+        // the variables it closes over) so nothing of this request survives
+        // into the next; curl_reset() keeps the connection cache.
+        curl_reset($handle);
 
         if (\CURLE_OPERATION_TIMEDOUT === $errno) {
             throw new TimeoutException();
@@ -216,6 +242,34 @@ final class Transport
             'headers' => $received,
             'body' => (string) $response->getBody(),
         ];
+    }
+
+    /**
+     * The reused handle, created on first use.
+     *
+     * On PHP 8.5 and later it also joins a persistent share handle, so the
+     * connection, DNS and TLS session caches outlive a PHP-FPM request too.
+     * Cookies are deliberately not shared: the transport keeps no cookie jar.
+     * DNS entries still expire after libcurl's default 60 seconds.
+     */
+    private function handle(): \CurlHandle
+    {
+        if (null !== $this->handle) {
+            return $this->handle;
+        }
+        $handle = curl_init();
+        if (false === $handle) {
+            throw new ConnectionException('fingerly: could not initialise an HTTP handle');
+        }
+        if (\function_exists('curl_share_init_persistent')) {
+            $this->share = curl_share_init_persistent([
+                \CURL_LOCK_DATA_CONNECT,
+                \CURL_LOCK_DATA_DNS,
+                \CURL_LOCK_DATA_SSL_SESSION,
+            ]);
+        }
+
+        return $this->handle = $handle;
     }
 
     /** Strips the credential from anything an error may carry to logs. */
