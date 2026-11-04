@@ -169,6 +169,10 @@ final class Proxy
         }
         $this->onError = $onError;
 
+        if (null !== ($options['http_client'] ?? null)
+            && (null === ($options['request_factory'] ?? null) || null === ($options['stream_factory'] ?? null))) {
+            throw new ConfigurationException('request_factory and stream_factory are required alongside http_client');
+        }
         $this->transport = new Transport(
             timeout: $timeout,
             redactKey: $this->key,

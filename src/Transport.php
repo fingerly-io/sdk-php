@@ -264,36 +264,45 @@ final class Transport
         /** @var RequestFactoryInterface $factory */
         $factory = $this->requestFactory;
 
-        $request = $factory->createRequest($method, $url);
-        foreach ($headers as $name => $value) {
-            $request = $request->withHeader($name, $value);
-        }
-        if (null !== $body) {
-            /** @var null|StreamFactoryInterface $streams */
-            $streams = $this->streamFactory;
-            $request = null !== $streams
-                ? $request->withBody($streams->createStream($body))
-                : $request;
+        /** @var null|StreamFactoryInterface $streams */
+        $streams = $this->streamFactory;
+        if (null !== $body && '' !== $body && null === $streams) {
+            // Sending the request without its body would forward an empty
+            // identification rather than fail.
+            throw new ConnectionException('fingerly: a stream_factory is required to send a body through http_client');
         }
 
+        // Whatever the supplied client or its PSR-7 objects throw becomes this
+        // SDK's own error. The original is deliberately not chained: client
+        // exceptions commonly hold the request, and with it the key header.
         try {
+            $request = $factory->createRequest($method, $url);
+            foreach ($headers as $name => $value) {
+                $request = $request->withHeader($name, $value);
+            }
+            if (null !== $body && null !== $streams) {
+                $request = $request->withBody($streams->createStream($body));
+            }
+
             $response = $client->sendRequest($request);
-        } catch (NetworkExceptionInterface $e) {
-            throw new ConnectionException('fingerly: request failed: '.$this->redact($e->getMessage()), 0, $e);
-        } catch (ClientExceptionInterface $e) {
-            throw new ConnectionException('fingerly: request failed: '.$this->redact($e->getMessage()), 0, $e);
-        }
 
-        $received = [];
-        foreach ($response->getHeaders() as $name => $values) {
-            $received[strtolower((string) $name)] = implode(', ', $values);
-        }
+            $received = [];
+            foreach ($response->getHeaders() as $name => $values) {
+                $received[strtolower((string) $name)] = implode(', ', $values);
+            }
 
-        return [
-            'status' => $response->getStatusCode(),
-            'headers' => $received,
-            'body' => self::readCapped($response->getBody()),
-        ];
+            return [
+                'status' => $response->getStatusCode(),
+                'headers' => $received,
+                'body' => self::readCapped($response->getBody()),
+            ];
+        } catch (FingerlyException $e) {
+            throw $e;
+        } catch (ClientExceptionInterface|NetworkExceptionInterface $e) {
+            throw new ConnectionException('fingerly: request failed: '.$this->redact($e->getMessage()));
+        } catch (\Throwable $e) {
+            throw new ConnectionException(sprintf('fingerly: request failed: %s: %s', $e::class, $this->redact($e->getMessage())));
+        }
     }
 
     /**
