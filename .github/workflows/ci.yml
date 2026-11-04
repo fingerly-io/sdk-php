@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         # 8.1 is the supported floor; the rest guard against drift.
-        php: ["8.1", "8.2", "8.3", "8.4"]
+        php: ["8.1", "8.2", "8.3", "8.4", "8.5"]
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -25,6 +25,37 @@ jobs:
       - run: composer validate --strict
       - run: vendor/bin/phpunit
       - run: vendor/bin/phpstan analyse --no-progress
+
+  # The adapters are exercised against every framework major they claim,
+  # each on the oldest PHP that major supports.
+  adapters:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: "8.1", laravel: "^10.0", symfony: "^6.4" }
+          - { php: "8.2", laravel: "^11.0", symfony: "^7.0" }
+          - { php: "8.3", laravel: "^12.0", symfony: "^7.0" }
+          - { php: "8.4", laravel: "^13.0", symfony: "^8.0" }
+    name: adapters (Laravel ${{ matrix.laravel }}, Symfony ${{ matrix.symfony }}, PHP ${{ matrix.php }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring
+          coverage: none
+      - name: pin the framework majors
+        run: |
+          composer require --dev --no-update --no-interaction \
+            "illuminate/http:${{ matrix.laravel }}" \
+            "symfony/http-kernel:${{ matrix.symfony }}" \
+            "symfony/var-dumper:${{ matrix.symfony }}"
+          composer update --with-all-dependencies --no-interaction --no-progress
+      - run: composer show illuminate/http symfony/http-kernel
+      - run: vendor/bin/phpunit tests/AdaptersTest.php
+      - run: vendor/bin/phpunit
 
   style:
     runs-on: ubuntu-latest
