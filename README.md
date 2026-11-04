@@ -175,7 +175,8 @@ nobody can spoof them.
 $proxy = new \Fingerly\Proxy([
     'proxy_key' => getenv('FINGERLY_PROXY_KEY'),
     'path' => '/k7x2qm4a',
-    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip'),
+    // Your CDN's visitor header when present, otherwise the TCP peer.
+    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
 ]);
 ```
 
@@ -281,8 +282,17 @@ proxy. It is an allowlist, so nothing on the response names Fingerly, whatever
 the API adds in future.
 
 > **`client_ip` is the one thing you must get right.** Resolve it from a header
-> your own infrastructure sets, such as your load balancer's or CDN's. Never
-> read the left-most `X-Forwarded-For` value: the visitor writes it.
+> your own infrastructure sets, such as your load balancer's or CDN's, and fall
+> back on `$r->remoteAddress`, the TCP peer the adapter passes in. Only trust
+> that header when traffic can reach your server through that CDN or load
+> balancer alone; otherwise a visitor can send it themselves. Never read the
+> left-most `X-Forwarded-For` value: the visitor writes it.
+>
+> The callback must return exactly one IPv4 or IPv6 address. Anything else
+> (null, an empty string, a list, a port, padding) is a configuration error:
+> nothing is forwarded, the browser gets `500` with "The client IP callback
+> returned no valid address", and the first occurrence in the process is
+> reported through `on_error` (or `error_log()` without one).
 
 Under Laravel and Symfony the relayed `Cache-Control: no-store` arrives as
 `no-store, private`, because `ResponseHeaderBag` appends a visibility

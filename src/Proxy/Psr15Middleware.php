@@ -80,6 +80,7 @@ final class Psr15Middleware implements MiddlewareInterface
             path: self::path($request),
             headers: $headers,
             body: self::readAtMost($stream, $this->proxy->maxBodyBytes() + 1),
+            remoteAddress: is_string($remote = $request->getServerParams()['REMOTE_ADDR'] ?? null) ? $remote : null,
         );
     }
 

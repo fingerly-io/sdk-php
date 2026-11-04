@@ -474,6 +474,91 @@ final class ProxyTest extends TestCase
         self::assertSame(0, $this->server->requestCount());
     }
 
+    /**
+     * Exactly one IP literal or nothing is forwarded: anything else would
+     * record the wrong visitor, or the proxy host itself, against the event.
+     */
+    public function testRefusesEveryClientIpThatIsNotExactlyOneAddress(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+
+        foreach ([
+            null, '', 'null', 'unknown', '1.2.3.4, 5.6.7.8', ' 1.2.3.4', "1.2.3.4\n", '1.2.3.4:443',
+            '999.1.1.1', 'fe80::1%en0', '[2001:db8::1]', 7, false,
+        ] as $value) {
+            $proxy = new Proxy([
+                'proxy_key' => TestServer::PROXY_KEY,
+                'path' => self::PATH,
+                'upstream' => $this->server->baseUrl(),
+                'client_ip' => static fn (ProxyRequest $request): mixed => $value,
+                'on_error' => static function (string $line): void {},
+            ]);
+            $response = $proxy->handle($this->identify(self::PATH));
+
+            self::assertSame(500, $response->status, var_export($value, true).' was accepted');
+            self::assertSame('The client IP callback returned no valid address', $response->body);
+            self::assertSame('text/plain; charset=utf-8', $response->headers['content-type']);
+        }
+        self::assertSame(0, $this->server->requestCount());
+    }
+
+    public function testAcceptsEitherAddressFamily(): void
+    {
+        foreach (['198.51.100.9', '2001:db8::1', '::ffff:198.51.100.9'] as $address) {
+            $this->server = TestServer::always(200, self::IDENTIFIED);
+            $proxy = new Proxy([
+                'proxy_key' => TestServer::PROXY_KEY,
+                'path' => self::PATH,
+                'upstream' => $this->server->baseUrl(),
+                'client_ip' => static fn (ProxyRequest $request): string => $address,
+            ]);
+
+            self::assertSame(200, $proxy->handle($this->identify(self::PATH))->status, $address);
+            self::assertSame($address, TestServer::header($this->server->first(), 'x-fingerly-client-ip'));
+            $this->server->stop();
+        }
+        $this->server = null;
+    }
+
+    /** Every request fails the same way until the code is fixed, so it is said once. */
+    public function testReportsABrokenClientIpCallbackOncePerProcess(): void
+    {
+        (new \ReflectionProperty(Proxy::class, 'reportedClientIp'))->setValue(null, false);
+        $lines = [];
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => 'http://127.0.0.1:1',
+            'client_ip' => static function (ProxyRequest $request): string {
+                throw new \RuntimeException('no header');
+            },
+            'on_error' => static function (string $line) use (&$lines): void {
+                $lines[] = $line;
+            },
+        ]);
+
+        for ($i = 0; $i < 3; ++$i) {
+            self::assertSame(500, $proxy->handle($this->identify(self::PATH))->status);
+        }
+        self::assertSame(['fingerly proxy: the client_ip callback returned no valid IP address; nothing was forwarded'], $lines);
+    }
+
+    /** With no trusted header, the callback can fall back on the TCP peer. */
+    public function testGivesTheCallbackThePeerAddress(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => $this->server->baseUrl(),
+            'client_ip' => static fn (ProxyRequest $r): string => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
+        ]);
+
+        $proxy->handle(new ProxyRequest('POST', self::PATH, ['x-api-key' => TestServer::PUBLIC_KEY], '{}', '192.0.2.44'));
+
+        self::assertSame('192.0.2.44', TestServer::header($this->server->first(), 'x-fingerly-client-ip'));
+    }
+
     /** The callback sees the request, so it can read whatever header you trust. */
     public function testReadsTheAddressFromTheRequestTheIntegrationChose(): void
     {
@@ -497,8 +582,10 @@ final class ProxyTest extends TestCase
         $_SERVER['REQUEST_URI'] = self::PATH.'?ignored=1';
         $_SERVER['HTTP_X_API_KEY'] = TestServer::PUBLIC_KEY;
         $_SERVER['CONTENT_TYPE'] = 'application/json';
+        $_SERVER['REMOTE_ADDR'] = '192.0.2.44';
 
         $request = ProxyRequest::fromGlobals();
+        self::assertSame('192.0.2.44', $request->remoteAddress);
 
         self::assertSame('POST', $request->method);
         self::assertSame(self::PATH, $request->path);

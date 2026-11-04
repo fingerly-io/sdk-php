@@ -14,9 +14,10 @@ namespace Fingerly\Proxy;
  * ```php
  * $response = $proxy->handle(new ProxyRequest(
  *     method: $_SERVER['REQUEST_METHOD'],
- *     path: parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH),
+ *     path: explode('?', $_SERVER['REQUEST_URI'], 2)[0],
  *     headers: getallheaders(),
  *     body: fopen('php://input', 'rb'),
+ *     remoteAddress: $_SERVER['REMOTE_ADDR'] ?? null,
  * ));
  * ```
  */
@@ -29,17 +30,22 @@ final class ProxyRequest
     public readonly mixed $body;
 
     /**
-     * @param string                $method  the HTTP method, such as `POST`
-     * @param string                $path    the request path, with no query string
-     * @param array<string, string> $headers header names in any case; they are lowercased here
-     * @param resource|string       $body    the raw body, or a stream the proxy reads under its own
-     *                                       limit, which is what keeps an oversized body out of memory
+     * @param string                $method        the HTTP method, such as `POST`
+     * @param string                $path          the request path, with no query string
+     * @param array<string, string> $headers       header names in any case; they are lowercased here
+     * @param resource|string       $body          the raw body, or a stream the proxy reads under its
+     *                                             own limit, which is what keeps an oversized body out
+     *                                             of memory
+     * @param null|string           $remoteAddress the TCP peer the request arrived from, for a
+     *                                             `client_ip` callback to fall back on when no trusted
+     *                                             proxy header is present
      */
     public function __construct(
         public readonly string $method,
         public readonly string $path,
         array $headers = [],
         mixed $body = '',
+        public readonly ?string $remoteAddress = null,
     ) {
         $lowered = [];
         foreach ($headers as $name => $value) {
@@ -83,6 +89,7 @@ final class ProxyRequest
             path: '' === $path ? '/' : $path,
             headers: $headers,
             body: false === $stream ? '' : $stream,
+            remoteAddress: is_string($_SERVER['REMOTE_ADDR'] ?? null) ? $_SERVER['REMOTE_ADDR'] : null,
         );
     }
 }

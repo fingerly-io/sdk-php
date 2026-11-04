@@ -73,8 +73,14 @@ final class Proxy
         'retry-after',
     ];
 
+    /** The one answer to a client_ip callback that gave no usable address. */
+    private const NO_CLIENT_IP = 'The client IP callback returned no valid address';
+
     /** Statuses that must not carry a body. */
     private const BODILESS_STATUSES = [204, 205, 304];
+
+    /** Whether this process has already reported a broken client_ip callback. */
+    private static bool $reportedClientIp = false;
 
     /** Server-held proxy key, or deprecated secret key, sent only to Fingerly. */
     private readonly Secret $key;
@@ -233,13 +239,15 @@ final class Proxy
             return self::refuse(413, 'Payload Too Large');
         }
 
-        try {
-            $headers = $this->upstreamHeaders($request, $apiKey);
-        } catch (ConfigurationException) {
-            // A client_ip that cannot be a header value is a bug in the
-            // integration, not something the visitor did.
-            return self::refuse(500, 'Internal Server Error');
+        $clientIp = $this->clientIp($request);
+        if (null === $clientIp) {
+            // A bug in the integration, not something the visitor did, and
+            // forwarding anyway would record the wrong visitor or none.
+            self::reportClientIpOnce($this->onError);
+
+            return self::refuse(500, self::NO_CLIENT_IP);
         }
+        $headers = $this->upstreamHeaders($request, $apiKey, $clientIp);
 
         // Give Fingerly its deadline and then answer, rather than holding the
         // browser's connection open, and never let upstream trouble surface
@@ -339,22 +347,52 @@ final class Proxy
     }
 
     /**
+     * Runs the client_ip callback and accepts exactly one IPv4 or IPv6
+     * literal: not null, not empty, not a list, not padded, not a zone-scoped
+     * address. A callback that throws gave no address either.
+     */
+    private function clientIp(ProxyRequest $request): ?string
+    {
+        try {
+            $value = ($this->clientIp)($request);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return is_string($value) && false !== filter_var($value, \FILTER_VALIDATE_IP) ? $value : null;
+    }
+
+    /**
+     * Reports a broken client_ip callback once per process, not once per
+     * request: every request fails the same way until the code is fixed.
+     *
+     * @param null|callable(string): void $onError
+     */
+    private static function reportClientIpOnce(?callable $onError): void
+    {
+        if (self::$reportedClientIp) {
+            return;
+        }
+        self::$reportedClientIp = true;
+        $line = 'fingerly proxy: the client_ip callback returned no valid IP address; nothing was forwarded';
+
+        try {
+            null === $onError ? error_log($line) : $onError($line);
+        } catch (\Throwable) {
+            // Deliberately ignored.
+        }
+    }
+
+    /**
      * Builds the upstream headers.
      *
      * Nothing is copied wholesale: only the body's content type, the visitor
      * metadata Fingerly needs, and an idempotency key when the SDK sent one.
      *
      * @return array<string, string>
-     *
-     * @throws ConfigurationException if client_ip returns a value unusable as a header
      */
-    private function upstreamHeaders(ProxyRequest $request, #[\SensitiveParameter] string $apiKey): array
+    private function upstreamHeaders(ProxyRequest $request, #[\SensitiveParameter] string $apiKey, string $clientIp): array
     {
-        $clientIp = ($this->clientIp)($request);
-        if (!is_string($clientIp) || 1 !== preg_match('/\A[\x20-\x7e]*\z/', $clientIp)) {
-            throw new ConfigurationException('client_ip must resolve to a plain address');
-        }
-
         $contentType = $request->header('content-type');
         $headers = [
             'content-type' => '' !== $contentType ? $contentType : 'application/json',

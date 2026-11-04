@@ -206,6 +206,47 @@ final class AdaptersTest extends TestCase
         self::assertSame(0, $this->server?->requestCount());
     }
 
+    /** Every adapter hands the core the TCP peer, for client_ip to fall back on. */
+    public function testEveryAdapterPassesThePeerAddress(): void
+    {
+        self::assertNotNull($this->server);
+        $seen = [];
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => $this->server->baseUrl(),
+            'client_ip' => static function (ProxyRequest $request) use (&$seen): string {
+                $seen[] = $request->remoteAddress;
+
+                return (string) $request->remoteAddress;
+            },
+        ]);
+        $server = ['HTTP_X_API_KEY' => TestServer::PUBLIC_KEY, 'CONTENT_TYPE' => 'application/json', 'REMOTE_ADDR' => '192.0.2.44'];
+
+        (new Psr15Middleware($proxy, new Psr17Factory()))->process(
+            new ServerRequest('POST', 'https://shop.example.com'.self::PATH, ['x-api-key' => TestServer::PUBLIC_KEY], '{}', '1.1', ['REMOTE_ADDR' => '192.0.2.44']),
+            $this->refusingHandler(),
+        );
+        (new LaravelMiddleware($proxy))->handle(
+            LaravelRequest::create(self::PATH, 'POST', [], [], [], $server, '{}'),
+            static fn (LaravelRequest $r): SymfonyResponse => new SymfonyResponse('not reached', 500),
+        );
+        $kernel = new class implements HttpKernelInterface {
+            public function handle(SymfonyRequest $request, int $type = self::MAIN_REQUEST, bool $catch = true): SymfonyResponse
+            {
+                return new SymfonyResponse('not reached', 500);
+            }
+        };
+        (new SymfonyListener($proxy))->onKernelRequest(new RequestEvent(
+            $kernel,
+            SymfonyRequest::create(self::PATH, 'POST', [], [], [], $server, '{}'),
+            HttpKernelInterface::MAIN_REQUEST,
+        ));
+
+        self::assertSame(['192.0.2.44', '192.0.2.44', '192.0.2.44'], $seen);
+        self::assertSame('192.0.2.44', TestServer::header($this->server->first(), 'x-fingerly-client-ip'));
+    }
+
     /** A request for another path costs nothing: its body is never touched. */
     public function testLaravelMiddlewareNeverReadsTheBodyOfAnotherRoute(): void
     {

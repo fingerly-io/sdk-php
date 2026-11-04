@@ -87,6 +87,7 @@ final class SymfonyListener implements EventSubscriberInterface
             path: $request->getPathInfo(),
             headers: $headers,
             body: is_resource($body) ? $body : (string) $request->getContent(),
+            remoteAddress: is_string($remote = $request->server->get('REMOTE_ADDR')) ? $remote : null,
         );
     }
 }
