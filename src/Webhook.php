@@ -15,6 +15,13 @@ final class Webhook
     /** How far a delivery's timestamp may be from now before it is refused. */
     public const DEFAULT_TOLERANCE = 300;
 
+    /**
+     * How many comma-separated signatures are considered. A rotation sends
+     * two; the cap keeps a hostile header from buying one HMAC comparison per
+     * comma.
+     */
+    public const MAX_SIGNATURES = 32;
+
     /** A lowercase hex digest, exactly as Fingerly sends it. */
     private const SIGNATURE_PATTERN = '/\Asha256=[a-f0-9]{64}\z/';
 
@@ -71,7 +78,10 @@ final class Webhook
         }
 
         $expected = hash_hmac('sha256', $timestamp.'.'.$payload, $secret);
-        foreach (explode(',', $signature) as $candidate) {
+        // The limit leaves everything past the cap in one last element, which
+        // is then dropped unread.
+        $candidates = array_slice(explode(',', $signature, self::MAX_SIGNATURES + 1), 0, self::MAX_SIGNATURES);
+        foreach ($candidates as $candidate) {
             if (self::matches($candidate, $expected)) {
                 return true;
             }

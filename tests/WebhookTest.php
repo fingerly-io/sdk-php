@@ -36,6 +36,20 @@ final class WebhookTest extends TestCase
     }
 
     /** The signature covers the body, so one changed byte invalidates it. */
+    /** Only the first 32 signatures in the header are looked at. */
+    public function testConsidersAtMost32Signatures(): void
+    {
+        $timestamp = (string) time();
+        $valid = 'sha256='.hash_hmac('sha256', $timestamp.'.{}', TestServer::WEBHOOK_SECRET);
+        $decoys = array_fill(0, Webhook::MAX_SIGNATURES - 1, 'sha256='.str_repeat('0', 64));
+
+        $last = implode(',', [...$decoys, $valid]);
+        self::assertTrue(Webhook::verify(TestServer::WEBHOOK_SECRET, '{}', $timestamp, $last));
+
+        $pastTheCap = implode(',', [...$decoys, 'sha256='.str_repeat('1', 64), $valid]);
+        self::assertFalse(Webhook::verify(TestServer::WEBHOOK_SECRET, '{}', $timestamp, $pastTheCap));
+    }
+
     public function testRefusesATamperedBody(): void
     {
         self::assertFalse($this->verify(
