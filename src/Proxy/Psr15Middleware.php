@@ -9,6 +9,7 @@ use Fingerly\Proxy;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Message\StreamInterface;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
@@ -77,9 +78,28 @@ final class Psr15Middleware implements MiddlewareInterface
             method: $request->getMethod(),
             path: $request->getUri()->getPath(),
             headers: $headers,
-            // Read one byte past the limit and no further, so an oversized
-            // body is refused without being held in memory first.
-            body: $stream->read($this->proxy->maxBodyBytes() + 1),
+            body: self::readAtMost($stream, $this->proxy->maxBodyBytes() + 1),
         );
+    }
+
+    /**
+     * Reads up to $limit bytes, looping because StreamInterface::read() may
+     * return fewer bytes than asked for: over php://input or a socket, fread()
+     * returns one 8 KiB chunk per call, so a single read() silently truncated
+     * every body larger than that. Reading one byte past the proxy's limit and
+     * no further still refuses an oversized body without holding it whole.
+     */
+    private static function readAtMost(StreamInterface $stream, int $limit): string
+    {
+        $body = '';
+        while (strlen($body) < $limit && !$stream->eof()) {
+            $chunk = $stream->read($limit - strlen($body));
+            if ('' === $chunk) {
+                break;
+            }
+            $body .= $chunk;
+        }
+
+        return $body;
     }
 }

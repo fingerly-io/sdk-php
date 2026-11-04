@@ -86,6 +86,39 @@ final class AdaptersTest extends TestCase
         self::assertSame(0, $this->server?->requestCount());
     }
 
+    /**
+     * StreamInterface::read() may return less than asked for, and over
+     * php://input it returns 8 KiB at a time, so one read() cut every larger
+     * body short and the API refused the truncated identification.
+     */
+    public function testPsr15MiddlewareForwardsABodyLargerThanOneRead(): void
+    {
+        $middleware = new Psr15Middleware($this->proxy(), new Psr17Factory());
+        $body = '{"signals":{"pad":"'.str_repeat('x', 20000).'"}}';
+
+        $response = $middleware->process(
+            $this->psrRequest(self::PATH)->withBody(new OneChunkStream($body)),
+            $this->refusingHandler(),
+        );
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame($body, $this->server?->first()['body']);
+    }
+
+    /** With no Content-Length the limit is enforced while reading, past one chunk. */
+    public function testPsr15MiddlewareRefusesAnOversizedBodyThatDeclaresNoLength(): void
+    {
+        $middleware = new Psr15Middleware($this->proxy(), new Psr17Factory());
+
+        $response = $middleware->process(
+            $this->psrRequest(self::PATH)->withBody(new OneChunkStream(str_repeat('x', 1048577))),
+            $this->refusingHandler(),
+        );
+
+        self::assertSame(413, $response->getStatusCode());
+        self::assertSame(0, $this->server?->requestCount());
+    }
+
     public function testLaravelMiddlewareForwardsToTheIngestUrl(): void
     {
         $middleware = new LaravelMiddleware($this->proxy());
