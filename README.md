@@ -52,10 +52,21 @@ $fingerly = new \Fingerly\Client($secretKey, [
 ## Deadlines
 
 `timeout` bounds the whole exchange, including receiving the body, so a server
-that answers and then stalls times out like one that never answered. It
-defaults to 5 seconds. cURL's `CURLOPT_TIMEOUT_MS` covers the transfer end to
-end, which is what makes that true here without the bookkeeping the Ruby and
-Java SDKs needed.
+that answers and then stalls, or sends a byte at a time, times out like one
+that never answered. It defaults to 5 seconds, for reads and for the proxy.
+cURL's `CURLOPT_TIMEOUT_MS` covers the transfer end to end. A response body
+over 4 MiB is refused rather than buffered.
+
+## Connections
+
+A client or proxy keeps one cURL handle and reuses its connection, so a
+long-running worker (Octane, FrankenPHP, RoadRunner) opens one connection to
+Fingerly and keeps it. On PHP 8.5 and later the connection, DNS and TLS session
+caches are also shared across the requests a PHP-FPM worker serves, so a client
+built per request reuses them too. On PHP 8.1 to 8.4 under PHP-FPM each request
+that builds a new client opens a new connection; at a few hundred proxied
+requests a second per host, run PHP 8.5 or a worker runtime. No cookies are
+kept, and redirects are never followed.
 
 ## Errors
 
@@ -186,17 +197,99 @@ $proxy = new \Fingerly\Proxy([
 ```
 
 PHP has three live server request shapes, so there are three adapters over one
-core:
+core. Build the `Proxy` once per process and share it: it holds no per-request
+state, and sharing it is what lets its connection be reused.
+
+### Slim, Mezzio, anything PSR-15
 
 ```php
-// Slim, Mezzio, anything PSR-15
-$app->add(new \Fingerly\Proxy\Psr15Middleware($proxy, $responseFactory));
+$app = \Slim\Factory\AppFactory::create();
+// ... your routes and other middleware ...
+// Added last, so it runs first.
+$app->add(new \Fingerly\Proxy\Psr15Middleware($proxy, $app->getResponseFactory()));
+```
 
-// Laravel: bootstrap/app.php (11) or app/Http/Kernel.php (10)
-$middleware->append(\Fingerly\Proxy\LaravelMiddleware::class);
+### Laravel
 
-// Symfony: config/services.yaml
-// Fingerly\Proxy\SymfonyListener: { arguments: ['@fingerly.proxy'] }
+The middleware receives the `Proxy` from the container, which cannot build it
+on its own (`client_ip` is a callable), so bind it once. Without the binding
+every request to the application fails with a `BindingResolutionException`.
+
+```php
+// config/services.php
+'fingerly' => [
+    'proxy_key' => env('FINGERLY_PROXY_KEY'),
+    'proxy_path' => env('FINGERLY_PROXY_PATH'),
+    'secret_key' => env('FINGERLY_SECRET_KEY'),
+],
+```
+
+```php
+// app/Providers/AppServiceProvider.php, in register()
+$this->app->singleton(\Fingerly\Proxy::class, fn () => new \Fingerly\Proxy([
+    'proxy_key' => config('services.fingerly.proxy_key'),
+    'path' => config('services.fingerly.proxy_path'),
+    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
+    'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),
+]));
+$this->app->singleton(\Fingerly\Client::class, fn () => new \Fingerly\Client(
+    config('services.fingerly.secret_key'),
+));
+```
+
+```php
+// bootstrap/app.php (Laravel 11 and later)
+->withMiddleware(function (\Illuminate\Foundation\Configuration\Middleware $middleware): void {
+    $middleware->append(\Fingerly\Proxy\LaravelMiddleware::class);
+})
+
+// app/Http/Kernel.php (Laravel 10): add it to $middleware
+\Fingerly\Proxy\LaravelMiddleware::class,
+```
+
+Laravel reads and decodes a JSON body when it builds the request, before any
+middleware runs, so under Laravel the 1 MiB limit refuses an oversized body but
+cannot stop it being read into memory first. Cap the body size in the web
+server as well: `client_max_body_size` in nginx, `request_body { max_size }` in
+Caddy and FrankenPHP.
+
+### Symfony
+
+The listener runs before the router. Define the `Proxy` as a service, with an
+invokable class for `client_ip`, because a closure cannot be written in YAML.
+With the skeleton's `autoconfigure: true`, the listener is registered as an
+event subscriber on its own.
+
+```yaml
+# config/services.yaml, below the skeleton's _defaults and App\ entries
+    fingerly.proxy:
+        class: Fingerly\Proxy
+        arguments:
+            - proxy_key: '%env(FINGERLY_PROXY_KEY)%'
+              path: '%env(FINGERLY_PROXY_PATH)%'
+              client_ip: ['@App\Fingerly\ClientIp', '__invoke']
+              on_error: ['@logger', 'warning']
+
+    Fingerly\Proxy\SymfonyListener:
+        arguments: ['@fingerly.proxy']
+
+    Fingerly\Client:
+        arguments: ['%env(FINGERLY_SECRET_KEY)%']
+```
+
+```php
+// src/Fingerly/ClientIp.php
+namespace App\Fingerly;
+
+use Fingerly\Proxy\ProxyRequest;
+
+final class ClientIp
+{
+    public function __invoke(ProxyRequest $request): string
+    {
+        return $request->header('cf-connecting-ip') ?: (string) $request->remoteAddress;
+    }
+}
 ```
 
 Then point the browser SDK at the same path:
@@ -220,11 +313,27 @@ $response = $proxy->handle(new \Fingerly\Proxy\ProxyRequest(
     path: $this->request->getURI(true),
     headers: $this->request->getHeaders(),
     body: $this->request->getRawBody(),
+    remoteAddress: $this->request->getClientAddress(),
 ));
 
 // or, with no framework at all
 $proxy->handle(\Fingerly\Proxy\ProxyRequest::fromGlobals())->send();
 ```
+
+`fromGlobals()` reads `$_SERVER` and `php://input`, so it is for PHP-FPM, CGI
+and the built-in server only. In a long-running worker those globals belong to
+the worker, not the request: build the `ProxyRequest` from the runtime's own
+request object instead, and let `client_ip` read `remoteAddress` rather than
+`$_SERVER['REMOTE_ADDR']`.
+
+### Event loops
+
+The proxy and the client are synchronous: each call holds the calling thread
+for up to `timeout` while Fingerly answers. That is right for PHP-FPM, Octane,
+FrankenPHP and RoadRunner, where a worker serves one request at a time. Never
+call them from an event loop (ReactPHP, AMPHP, Revolt, or Swoole and
+OpenSwoole coroutines): one slow answer would stall every request that loop is
+serving. Hand the call to a worker process or a thread pool instead.
 
 `$proxy->handles($request)` answers whether a request is the one the proxy
 owns, so everything else goes to your application untouched rather than getting
@@ -326,12 +435,14 @@ production secrets in fixtures.
 ## Source structure
 
 `Client.php` holds the client and its options. `Transport.php` performs one
-HTTP exchange, over ext-curl or a supplied PSR-18 client, and maps failures to
-`ApiException`. `Events.php` owns the event reads and the list filters;
+HTTP exchange over a reused cURL handle or a supplied PSR-18 client, caps the
+response body, and maps failures to `ApiException`. `Secret.php` holds a key
+so that no dump or serialisation can show it. `Events.php` owns the event reads and the list filters;
 `Event.php`, `EventPage.php`, `EventTrigger.php` and
 `WebhookEvent.php` are what they decode into, and `Json.php` reads those
 bodies without trusting their shape. `Webhook.php` verifies signatures and
-needs nothing else in the package. `Proxy.php` is the same-origin core, with
+needs nothing else in the package; `WebhookException.php` is what `parse()`
+throws for a payload it cannot read. `Proxy.php` is the same-origin core, with
 `Proxy/` holding its request and response types and the three adapters.
 `Config.php` validates every caller-supplied option: keys, origins, API
 versions, the proxy path, durations and sizes, all before any network access.
