@@ -19,7 +19,8 @@
         "psr/http-server-middleware": "^1.0",
         "nyholm/psr7": "^1.8",
         "illuminate/http": "^10.0 || ^11.0",
-        "symfony/http-kernel": "^6.4 || ^7.0"
+        "symfony/http-kernel": "^6.4 || ^7.0",
+        "symfony/var-dumper": "^6.4 || ^7.0 || ^8.0"
     },
     "suggest": {
         "psr/http-client": "To send API requests through your own PSR-18 client instead of ext-curl.",

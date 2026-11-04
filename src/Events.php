@@ -21,7 +21,7 @@ final class Events
     public function __construct(
         private readonly Transport $transport,
         private readonly string $baseUrl,
-        private readonly string $secretKey,
+        private readonly Secret $secretKey,
     ) {}
 
     /**
@@ -96,7 +96,7 @@ final class Events
     private function read(string $path): array
     {
         $response = $this->transport->send('GET', $this->baseUrl.$path, [
-            'x-api-key' => $this->secretKey,
+            'x-api-key' => $this->secretKey->reveal(),
             'accept' => 'application/json',
             'user-agent' => Transport::USER_AGENT,
         ]);

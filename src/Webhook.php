@@ -53,6 +53,7 @@ final class Webhook
      * @param null|\DateTimeInterface $now       current time; override only in tests
      */
     public static function verify(
+        #[\SensitiveParameter]
         string $secret,
         string $payload,
         ?string $timestamp,

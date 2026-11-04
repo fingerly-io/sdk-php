@@ -76,7 +76,7 @@ final class Proxy
     private const BODILESS_STATUSES = [204, 205, 304];
 
     /** Server-held proxy key, or deprecated secret key, sent only to Fingerly. */
-    private readonly string $key;
+    private readonly Secret $key;
 
     /** Proxy keys authenticate the browser's public key; secret keys do not. */
     private readonly bool $usesProxyKey;
@@ -110,7 +110,7 @@ final class Proxy
      *
      * @throws ConfigurationException if a credential, path, limit or callback is invalid
      */
-    public function __construct(array $options)
+    public function __construct(#[\SensitiveParameter] array $options)
     {
         Config::rejectUnknown($options, self::OPTIONS);
 
@@ -128,11 +128,12 @@ final class Proxy
         }
 
         $this->usesProxyKey = null !== $proxyKey;
-        $this->key = (string) ($proxyKey ?? $secretKey);
+        $key = (string) ($proxyKey ?? $secretKey);
         $this->scope = Config::parseKey(
-            $this->key,
+            $key,
             $this->usesProxyKey ? Config::KEY_PROXY : Config::KEY_SECRET,
         );
+        $this->key = new Secret($key);
 
         $upstream = $options['upstream'] ?? null;
         $apiVersion = $options['api_version'] ?? null;
@@ -243,10 +244,10 @@ final class Proxy
      * environment, which the proxy forwards alongside its own. The deprecated
      * secret-key mode authenticates on its own and accepts anything.
      */
-    private function upstreamKeyFor(string $presented): ?string
+    private function upstreamKeyFor(#[\SensitiveParameter] string $presented): ?string
     {
         if (!$this->usesProxyKey) {
-            return $this->key;
+            return $this->key->reveal();
         }
 
         try {
@@ -296,7 +297,7 @@ final class Proxy
      *
      * @throws ConfigurationException if client_ip returns a value unusable as a header
      */
-    private function upstreamHeaders(ProxyRequest $request, string $apiKey): array
+    private function upstreamHeaders(ProxyRequest $request, #[\SensitiveParameter] string $apiKey): array
     {
         $clientIp = ($this->clientIp)($request);
         if (!is_string($clientIp) || 1 !== preg_match('/\A[\x20-\x7e]*\z/', $clientIp)) {
@@ -314,7 +315,7 @@ final class Proxy
             'user-agent' => Transport::USER_AGENT,
         ];
         if ($this->usesProxyKey) {
-            $headers['x-fingerly-proxy-key'] = $this->key;
+            $headers['x-fingerly-proxy-key'] = $this->key->reveal();
         }
         $idempotency = $request->header('idempotency-key');
         if ('' !== $idempotency) {

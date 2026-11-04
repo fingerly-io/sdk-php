@@ -43,7 +43,7 @@ final class Client
      *
      * @throws ConfigurationException if any option is invalid; nothing is sent until then
      */
-    public function __construct(string $secretKey, array $options = [])
+    public function __construct(#[\SensitiveParameter] string $secretKey, array $options = [])
     {
         Config::rejectUnknown($options, self::OPTIONS);
 
@@ -64,16 +64,17 @@ final class Client
             throw new ConfigurationException('request_factory is required alongside http_client');
         }
 
+        $secret = new Secret($secretKey);
         $this->events = new Events(
             new Transport(
                 timeout: $timeout,
-                redactKey: $secretKey,
+                redactKey: $secret,
                 httpClient: is_object($httpClient) ? $httpClient : null,
                 requestFactory: is_object($requestFactory) ? $requestFactory : null,
                 streamFactory: is_object($options['stream_factory'] ?? null) ? $options['stream_factory'] : null,
             ),
             $origin.'/api/'.$apiVersion,
-            $secretKey,
+            $secret,
         );
     }
 }

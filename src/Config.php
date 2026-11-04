@@ -45,7 +45,7 @@ final class Config
      *
      * @throws ConfigurationException if the key is malformed or of another kind
      */
-    public static function parseKey(string $key, string $expected): array
+    public static function parseKey(#[\SensitiveParameter] string $key, string $expected): array
     {
         if (1 !== preg_match(self::KEY_PATTERN, $key, $match) || $match[1] !== $expected) {
             throw new ConfigurationException(

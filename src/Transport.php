@@ -48,11 +48,11 @@ final class Transport
 
     /**
      * @param float       $timeout   deadline covering the request and reading its body
-     * @param null|string $redactKey a credential to strip from anything an error carries
+     * @param null|Secret $redactKey a credential to strip from anything an error carries
      */
     public function __construct(
         private readonly float $timeout,
-        private readonly ?string $redactKey = null,
+        private readonly ?Secret $redactKey = null,
         ?object $httpClient = null,
         ?object $requestFactory = null,
         ?object $streamFactory = null,
@@ -75,7 +75,7 @@ final class Transport
      * @throws ConnectionException
      * @throws TimeoutException
      */
-    public function send(string $method, string $url, array $headers, ?string $body = null): array
+    public function send(string $method, string $url, #[\SensitiveParameter] array $headers, ?string $body = null): array
     {
         if (null !== $this->httpClient) {
             return $this->sendPsr18($method, $url, $headers, $body);
@@ -118,7 +118,7 @@ final class Transport
      *
      * @return array{status: int, headers: array<string, string>, body: string}
      */
-    private function sendCurl(string $method, string $url, array $headers, ?string $body): array
+    private function sendCurl(string $method, string $url, #[\SensitiveParameter] array $headers, ?string $body): array
     {
         if ('' === $method || '' === $url) {
             throw new ConnectionException('fingerly: a request needs a method and a URL');
@@ -204,7 +204,7 @@ final class Transport
      *
      * @return array{status: int, headers: array<string, string>, body: string}
      */
-    private function sendPsr18(string $method, string $url, array $headers, ?string $body): array
+    private function sendPsr18(string $method, string $url, #[\SensitiveParameter] array $headers, ?string $body): array
     {
         /** @var ClientInterface $client */
         $client = $this->httpClient;
@@ -275,10 +275,11 @@ final class Transport
     /** Strips the credential from anything an error may carry to logs. */
     private function redact(string $value): string
     {
-        if (null === $this->redactKey || '' === $this->redactKey) {
+        $key = $this->redactKey?->reveal() ?? '';
+        if ('' === $key) {
             return $value;
         }
 
-        return str_replace($this->redactKey, '[redacted]', $value);
+        return str_replace($key, Secret::REDACTED, $value);
     }
 }
