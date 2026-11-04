@@ -23,16 +23,18 @@ namespace Fingerly;
 final class ApiException extends \RuntimeException implements FingerlyException
 {
     /**
-     * @param int         $status    the HTTP status code
-     * @param null|string $errorCode stable machine-readable code, such as `event_not_found`
-     * @param mixed       $details   additional context; its shape depends on the code
-     * @param null|string $requestId server-side trace id to quote in support requests
+     * @param int         $status     the HTTP status code
+     * @param null|string $errorCode  stable machine-readable code, such as `event_not_found`
+     * @param mixed       $details    additional context; its shape depends on the code
+     * @param null|string $requestId  server-side trace id to quote in support requests
+     * @param null|int    $retryAfter seconds the API asked the caller to wait, from Retry-After
      */
     public function __construct(
         private readonly int $status,
         private readonly ?string $errorCode = null,
         private readonly mixed $details = null,
         private readonly ?string $requestId = null,
+        private readonly ?int $retryAfter = null,
     ) {
         parent::__construct(
             null === $errorCode
@@ -71,6 +73,26 @@ final class ApiException extends \RuntimeException implements FingerlyException
     public function getRequestId(): ?string
     {
         return $this->requestId;
+    }
+
+    /**
+     * How many seconds the API asked you to wait before trying again, from
+     * its `Retry-After` header, or null when it sent none.
+     *
+     * The SDK never retries a read itself; this is what a caller's own retry
+     * or queue should honour after a `429`.
+     */
+    public function getRetryAfter(): ?int
+    {
+        return $this->retryAfter;
+    }
+
+    /**
+     * True when the API is asking the caller to slow down.
+     */
+    public function isRateLimited(): bool
+    {
+        return 429 === $this->status;
     }
 
     /**

@@ -183,6 +183,54 @@ final class ClientTest extends TestCase
         }
     }
 
+    /** A 429 says how long to wait; the SDK hands that over and never retries. */
+    public function testCarriesRetryAfterOnARateLimit(): void
+    {
+        $this->server = TestServer::always(429, '{"error":{"code":"rate_limited","status":429}}', [
+            'retry-after' => '7',
+            'x-request-id' => 'req_header',
+        ]);
+
+        try {
+            $this->client()->events->list();
+            self::fail('the request should have failed');
+        } catch (ApiException $e) {
+            self::assertTrue($e->isRateLimited());
+            self::assertSame(7, $e->getRetryAfter());
+            self::assertSame('rate_limited', $e->getErrorCode());
+            // The body carried no request id, so the header's is used.
+            self::assertSame('req_header', $e->getRequestId());
+        }
+        self::assertSame(1, $this->server->requestCount());
+    }
+
+    public function testReadsRetryAfterAsAnHttpDateOrNotAtAll(): void
+    {
+        foreach ([
+            [gmdate('D, d M Y H:i:s', time() + 30).' GMT', [28, 30]],
+            [gmdate('D, d M Y H:i:s', time() - 30).' GMT', [0, 0]],
+            ['soon', null],
+            ['-5', null],
+        ] as [$header, $expected]) {
+            $this->server = TestServer::always(503, 'down', ['retry-after' => $header]);
+
+            try {
+                $this->client()->events->list();
+                self::fail('the request should have failed');
+            } catch (ApiException $e) {
+                if (null === $expected) {
+                    self::assertNull($e->getRetryAfter(), $header);
+                } else {
+                    self::assertGreaterThanOrEqual($expected[0], $e->getRetryAfter(), $header);
+                    self::assertLessThanOrEqual($expected[1], $e->getRetryAfter(), $header);
+                }
+                self::assertNull($e->getErrorCode());
+            }
+            $this->server->stop();
+        }
+        $this->server = null;
+    }
+
     /**
      * An error body the SDK cannot parse still reports its status, and its
      * contents are dropped rather than surfaced.

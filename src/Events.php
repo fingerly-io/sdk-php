@@ -102,7 +102,7 @@ final class Events
         ]);
 
         if ($response['status'] < 200 || $response['status'] > 299) {
-            throw $this->transport->apiException($response['status'], $response['body']);
+            throw $this->transport->apiException($response['status'], $response['body'], $response['headers']);
         }
 
         return Json::decode($response['body'], $response['status']);

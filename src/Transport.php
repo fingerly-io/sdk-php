@@ -96,21 +96,29 @@ final class Transport
     /**
      * Maps a failed response to a redacted {@see ApiException}.
      *
-     * Only the status and the structured fields the API documents are
-     * surfaced. The raw body is deliberately dropped rather than echoed.
+     * Only the status, the structured fields the API documents, the request
+     * id and Retry-After are surfaced. The raw body is deliberately dropped
+     * rather than echoed.
+     *
+     * @param array<string, string> $headers the response headers, names lowercased
      */
-    public function apiException(int $status, string $body): ApiException
+    public function apiException(int $status, string $body, array $headers = []): ApiException
     {
+        $retryAfter = self::retryAfter($headers['retry-after'] ?? null);
+        $headerRequestId = isset($headers['x-request-id']) && '' !== $headers['x-request-id']
+            ? $this->redact($headers['x-request-id'])
+            : null;
+
         $decoded = json_decode(substr($body, 0, self::MAX_ERROR_BODY), true);
         if (!is_array($decoded)) {
             // A non-JSON or truncated body still reports its HTTP status, and
             // its contents are deliberately dropped rather than surfaced.
-            return new ApiException($status);
+            return new ApiException($status, null, null, $headerRequestId, $retryAfter);
         }
 
         $error = is_array($decoded['error'] ?? null) ? $decoded['error'] : [];
         $code = is_string($error['code'] ?? null) ? $this->redact($error['code']) : null;
-        $requestId = is_string($decoded['request_id'] ?? null) ? $this->redact($decoded['request_id']) : null;
+        $requestId = is_string($decoded['request_id'] ?? null) ? $this->redact($decoded['request_id']) : $headerRequestId;
 
         $details = null;
         if (array_key_exists('details', $error)) {
@@ -119,7 +127,24 @@ final class Transport
             $details = is_string($encoded) ? json_decode($this->redact($encoded), true) : null;
         }
 
-        return new ApiException($status, $code, $details, $requestId);
+        return new ApiException($status, $code, $details, $requestId, $retryAfter);
+    }
+
+    /**
+     * Reads Retry-After as whole seconds from now: either delta-seconds or an
+     * HTTP date. Anything else is no instruction at all.
+     */
+    private static function retryAfter(?string $value): ?int
+    {
+        if (null === $value || '' === ($value = trim($value))) {
+            return null;
+        }
+        if (1 === preg_match('/\A[0-9]{1,10}\z/', $value)) {
+            return (int) $value;
+        }
+        $at = \DateTimeImmutable::createFromFormat('D, d M Y H:i:s \G\M\T', $value, new \DateTimeZone('UTC'));
+
+        return false === $at ? null : max(0, $at->getTimestamp() - time());
     }
 
     /**

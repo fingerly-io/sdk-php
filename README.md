@@ -65,14 +65,18 @@ handles the lot, and the concrete classes tell them apart:
 | Class | When |
 | --- | --- |
 | `ConfigurationException` | An option was rejected. Nothing was sent. It is an `InvalidArgumentException`, because a key that was never valid will not become valid on a retry. |
-| `ApiException` | The API answered with a non-2xx status. |
+| `ApiException` | The API answered with a non-2xx status, a redirect included. |
 | `TimeoutException` | The request deadline elapsed. |
-| `ConnectionException` | The API could not be reached, or the connection failed mid-response. |
+| `ConnectionException` | The API could not be reached, the connection failed mid-response, or the response body was over 4 MiB. |
 
 `ApiException` carries `getStatus()`, and optional `getErrorCode()`,
-`getDetails()` and `getRequestId()`. The secret key is stripped from all three,
-and the response body is never echoed into a message. `getCode()` is the HTTP
-status too, so a handler that only logs the code still logs something useful.
+`getDetails()`, `getRequestId()` and `getRetryAfter()`, the seconds the API's
+`Retry-After` asked you to wait (null when it sent none). The secret key is
+stripped from all of them, and the response body is never echoed into a
+message. `getCode()` is the HTTP status too, so a handler that only logs the
+code still logs something useful. Reads never retry on their own; after a
+`429` (`$e->isRateLimited()`), wait `getRetryAfter()` seconds before your own
+retry.
 
 ```php
 try {
