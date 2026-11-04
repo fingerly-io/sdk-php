@@ -49,12 +49,13 @@ final class LaravelMiddleware
      */
     public function handle(Request $request, \Closure $next): Response
     {
-        $proxied = $this->toProxyRequest($request);
-        if (!$this->proxy->handles($proxied)) {
+        // Match on the path alone first: building the full request copies the
+        // body into a temp stream, which every other route would pay for.
+        if (!$this->proxy->handles(new ProxyRequest($request->getMethod(), $request->getPathInfo()))) {
             return $next($request);
         }
 
-        $answer = $this->proxy->handle($proxied);
+        $answer = $this->proxy->handle($this->toProxyRequest($request));
 
         return new Response($answer->body, $answer->status, $answer->headers);
     }

@@ -45,14 +45,15 @@ final class Psr15Middleware implements MiddlewareInterface
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        $proxied = $this->toProxyRequest($request);
         // Ask before answering, so everything else reaches the application
-        // rather than getting a 404 of ours.
-        if (!$this->proxy->handles($proxied)) {
+        // rather than getting a 404 of ours. Match on the path alone first:
+        // building the full request reads the body stream, which the
+        // application's own handler still needs.
+        if (!$this->proxy->handles(new ProxyRequest($request->getMethod(), $request->getUri()->getPath()))) {
             return $handler->handle($request);
         }
 
-        $answer = $this->proxy->handle($proxied);
+        $answer = $this->proxy->handle($this->toProxyRequest($request));
         $response = $this->responses->createResponse($answer->status);
         foreach ($answer->headers as $name => $value) {
             $response = $response->withHeader($name, $value);

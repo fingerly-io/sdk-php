@@ -62,12 +62,14 @@ final class SymfonyListener implements EventSubscriberInterface
             return;
         }
 
-        $proxied = $this->toProxyRequest($event->getRequest());
-        if (!$this->proxy->handles($proxied)) {
+        $request = $event->getRequest();
+        // Match on the path alone first, so other routes never pay for the
+        // header copy or a body stream.
+        if (!$this->proxy->handles(new ProxyRequest($request->getMethod(), $request->getPathInfo()))) {
             return;
         }
 
-        $answer = $this->proxy->handle($proxied);
+        $answer = $this->proxy->handle($this->toProxyRequest($request));
         $event->setResponse(new Response($answer->body, $answer->status, $answer->headers));
     }
 

@@ -119,6 +119,37 @@ final class AdaptersTest extends TestCase
         self::assertSame(0, $this->server?->requestCount());
     }
 
+    /**
+     * The middleware sees every request. Building a proxy request for one it
+     * does not handle read its body stream, which a non-seekable stream
+     * cannot give back, so the application's own POST routes got an empty or
+     * truncated body.
+     */
+    public function testPsr15MiddlewareLeavesTheApplicationItsBody(): void
+    {
+        $factory = new Psr17Factory();
+        $middleware = new Psr15Middleware($this->proxy(), $factory);
+        $body = '{"order":"'.str_repeat('x', 20000).'"}';
+
+        $response = $middleware->process(
+            $this->psrRequest('/orders')->withBody(new OneChunkStream($body)),
+            new class($factory) implements RequestHandlerInterface {
+                public function __construct(private readonly Psr17Factory $factory) {}
+
+                public function handle(ServerRequestInterface $request): ResponseInterface
+                {
+                    $response = $this->factory->createResponse(200);
+                    $response->getBody()->write((string) strlen($request->getBody()->getContents()));
+
+                    return $response;
+                }
+            },
+        );
+
+        self::assertSame((string) strlen($body), (string) $response->getBody());
+        self::assertSame(0, $this->server?->requestCount());
+    }
+
     public function testLaravelMiddlewareForwardsToTheIngestUrl(): void
     {
         $middleware = new LaravelMiddleware($this->proxy());
@@ -149,6 +180,19 @@ final class AdaptersTest extends TestCase
             self::assertSame('the application answered', $response->getContent(), $path);
         }
         self::assertSame(0, $this->server?->requestCount());
+    }
+
+    /** A request for another path costs nothing: its body is never touched. */
+    public function testLaravelMiddlewareNeverReadsTheBodyOfAnotherRoute(): void
+    {
+        $middleware = new LaravelMiddleware($this->proxy());
+        $request = CountingLaravelRequest::create('/orders', 'POST', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+        ], '{"order":1}');
+
+        $middleware->handle($request, static fn (LaravelRequest $r): SymfonyResponse => new SymfonyResponse('ok'));
+
+        self::assertSame(0, $request->contentReads);
     }
 
     /**
@@ -201,6 +245,24 @@ final class AdaptersTest extends TestCase
             self::assertNull($event->getResponse(), $path);
         }
         self::assertSame(0, $this->server?->requestCount());
+    }
+
+    public function testSymfonyListenerNeverReadsTheBodyOfAnotherRoute(): void
+    {
+        $listener = new SymfonyListener($this->proxy());
+        $request = CountingSymfonyRequest::create('/orders', 'POST', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+        ], '{"order":1}');
+        $kernel = new class implements HttpKernelInterface {
+            public function handle(SymfonyRequest $request, int $type = self::MAIN_REQUEST, bool $catch = true): SymfonyResponse
+            {
+                return new SymfonyResponse('ok');
+            }
+        };
+
+        $listener->onKernelRequest(new RequestEvent($kernel, $request, HttpKernelInterface::MAIN_REQUEST));
+
+        self::assertSame(0, $request->contentReads);
     }
 
     /** A sub-request is the application's own; the proxy must not answer it. */
