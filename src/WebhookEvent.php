@@ -37,7 +37,8 @@ final class WebhookEvent
     /**
      * @param array<string, mixed> $body
      *
-     * @throws ApiException if the body is not a delivery this SDK can read
+     * @throws ApiException if the body is not a delivery this SDK can read; {@see Webhook::parse()}
+     *                      reports it as a WebhookException
      *
      * @internal
      */

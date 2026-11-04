@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Fingerly\Tests;
 
 use Fingerly\ApiException;
+use Fingerly\FingerlyException;
 use Fingerly\Webhook;
+use Fingerly\WebhookException;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -190,10 +192,27 @@ final class WebhookTest extends TestCase
         self::assertTrue($event->data['invented_later']);
     }
 
+    /**
+     * A bad payload is a webhook error, not an API error: no API call was
+     * made, and nothing that retries API errors should retry it.
+     */
     public function testRefusesAPayloadThatIsNotADelivery(): void
     {
-        $this->expectException(ApiException::class);
-        Webhook::parse('[]');
+        foreach ([
+            '[]' => 'The webhook payload is not a JSON object',
+            '{not json' => 'The webhook payload is not a JSON object',
+            '{"type":"identification.completed","created_at":"2026-09-17T12:00:00Z"}' => 'The webhook payload has no valid "id" field',
+            '{"id":"evt_1","type":"x","created_at":"secret-value"}' => 'The webhook payload has no valid "created_at" field',
+        ] as $payload => $message) {
+            try {
+                Webhook::parse((string) $payload);
+                self::fail($payload.' was parsed');
+            } catch (WebhookException $e) {
+                self::assertSame($message, $e->getMessage());
+                self::assertNotContains(ApiException::class, class_parents($e) ?: []);
+                self::assertContains(FingerlyException::class, class_implements($e) ?: []);
+            }
+        }
     }
 
     private function verify(string $signature, string $payload = self::PAYLOAD): bool

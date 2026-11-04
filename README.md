@@ -160,7 +160,8 @@ exception.
 Verification proves authenticity and freshness. It does not deduplicate, so
 persist processed `WebhookEvent::$id` values as well. `Webhook::parse()`
 decodes the envelope every delivery shares and leaves `$data` an array, so a
-new event type needs no upgrade.
+new event type needs no upgrade. A payload it cannot read throws
+`WebhookException`, which names the field at fault and never its value.
 
 Webhook verification touches neither the network nor ext-curl, so a receiver
 that does nothing else pulls in nothing else.

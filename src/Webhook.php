@@ -96,11 +96,21 @@ final class Webhook
      * Verify first: parsing an unverified payload is reading something anyone
      * could have sent.
      *
-     * @throws ApiException if the payload is not a delivery this SDK can read
+     * @throws WebhookException if the payload is not a delivery this SDK can read
      */
     public static function parse(string $payload): WebhookEvent
     {
-        return WebhookEvent::fromArray(Json::decode($payload));
+        try {
+            return WebhookEvent::fromArray(Json::decode($payload));
+        } catch (ApiException $e) {
+            // The JSON helpers speak in API errors; no API call was made here.
+            $details = $e->getDetails();
+            $field = is_array($details) && is_string($details['field'] ?? null) ? $details['field'] : null;
+
+            throw new WebhookException(null === $field
+                ? 'The webhook payload is not a JSON object'
+                : sprintf('The webhook payload has no valid "%s" field', $field));
+        }
     }
 
     /** Rejects replays: the signed time must be within tolerance of now. */
