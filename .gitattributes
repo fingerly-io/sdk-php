@@ -1,0 +1,12 @@
+# What `git archive` leaves out, and so what Packagist's dist zip and a
+# Composer install never ship: the package is src/, the licence, the readme
+# and the changelog.
+/.github export-ignore
+/tests export-ignore
+/tools export-ignore
+/contract export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/.php-cs-fixer.dist.php export-ignore
+/phpstan.neon.dist export-ignore
+/phpunit.xml.dist export-ignore

@@ -57,6 +57,14 @@ jobs:
           if [ "$installed" -ne 0 ]; then
             echo "the package acquired a runtime dependency:"; composer show --no-dev; exit 1
           fi
+      # The dist zip Composer installs is `git archive`, so this is exactly
+      # what a customer gets: the library, its licence, readme and changelog.
+      - name: the package ships only the library
+        run: |
+          shipped=$(git archive HEAD | tar -t | grep -v -E '^(src/.*|LICENSE|README\.md|CHANGELOG\.md|composer\.json)$' || true)
+          if [ -n "$shipped" ]; then
+            echo "the package would also ship:"; echo "$shipped"; exit 1
+          fi
       - name: the core works without a single vendor package
         run: |
           php -r '
