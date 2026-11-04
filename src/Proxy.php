@@ -251,7 +251,7 @@ final class Proxy
 
             return self::refuse(504, 'Gateway timeout');
         } catch (ConnectionException $e) {
-            $this->report('upstream request failed: '.$e->getMessage());
+            $this->report('upstream request failed: '.preg_replace('/\Afingerly: (request failed: )?/', '', $e->getMessage()));
 
             return self::refuse(502, 'Bad gateway');
         }

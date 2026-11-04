@@ -9,6 +9,7 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Client\NetworkExceptionInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Psr\Http\Message\StreamInterface;
 
 /**
  * One HTTP exchange, over ext-curl or a caller's PSR-18 client.
@@ -23,6 +24,14 @@ final class Transport
 {
     /** The SDK build that made the request, sent on every call. */
     public const USER_AGENT = 'fingerly-php/'.Client::VERSION;
+
+    /**
+     * The most of any response body this transport will hold. An identify
+     * answer or an event is a few kilobytes; anything near this is not one,
+     * and buffering it without a limit would let one response exhaust the
+     * worker's memory.
+     */
+    public const MAX_RESPONSE_BODY = 4194304;
 
     /**
      * Caps how much of a failed response is parsed for metadata. An error body
@@ -135,11 +144,26 @@ final class Transport
         }
 
         $received = [];
+        $buffer = '';
+        $tooLarge = false;
         $options = [
             \CURLOPT_URL => $url,
             \CURLOPT_CUSTOMREQUEST => $method,
             \CURLOPT_HTTPHEADER => $lines,
-            \CURLOPT_RETURNTRANSFER => true,
+            // A declared length over the cap is refused before any of it is
+            // read; the write callback enforces the cap on the real bytes.
+            \CURLOPT_MAXFILESIZE_LARGE => self::MAX_RESPONSE_BODY,
+            \CURLOPT_WRITEFUNCTION => static function ($_handle, string $chunk) use (&$buffer, &$tooLarge): int {
+                if (strlen($buffer) + strlen($chunk) > self::MAX_RESPONSE_BODY) {
+                    $tooLarge = true;
+
+                    // Anything but the chunk's length makes cURL abort.
+                    return 0;
+                }
+                $buffer .= $chunk;
+
+                return strlen($chunk);
+            },
             // The deadline covers the whole transfer, body included, so a
             // server that answers and then stalls still hits it.
             \CURLOPT_TIMEOUT_MS => (int) ceil($this->timeout * 1000),
@@ -185,12 +209,15 @@ final class Transport
         if (\CURLE_OPERATION_TIMEDOUT === $errno) {
             throw new TimeoutException();
         }
-        if (0 !== $errno || !is_string($response)) {
+        if ($tooLarge || \CURLE_FILESIZE_EXCEEDED === $errno) {
+            throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20));
+        }
+        if (0 !== $errno || false === $response) {
             throw new ConnectionException('fingerly: request failed: '.$this->redact($error));
         }
 
         /** @var array<string, string> $received */
-        return ['status' => $status, 'headers' => $received, 'body' => $response];
+        return ['status' => $status, 'headers' => $received, 'body' => $buffer];
     }
 
     /**
@@ -240,8 +267,31 @@ final class Transport
         return [
             'status' => $response->getStatusCode(),
             'headers' => $received,
-            'body' => (string) $response->getBody(),
+            'body' => self::readCapped($response->getBody()),
         ];
+    }
+
+    /**
+     * Reads a PSR-7 body up to the cap, looping because read() may return
+     * less than asked for.
+     *
+     * @throws ConnectionException if the body is over the cap
+     */
+    private static function readCapped(StreamInterface $stream): string
+    {
+        $body = '';
+        while (!$stream->eof()) {
+            $chunk = $stream->read(65536);
+            if ('' === $chunk) {
+                break;
+            }
+            $body .= $chunk;
+            if (strlen($body) > self::MAX_RESPONSE_BODY) {
+                throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20));
+            }
+        }
+
+        return $body;
     }
 
     /**
