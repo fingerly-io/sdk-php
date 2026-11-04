@@ -177,7 +177,7 @@ final class Transport
             \CURLOPT_HTTPHEADER => $lines,
             // A declared length over the cap is refused before any of it is
             // read; the write callback enforces the cap on the real bytes.
-            \CURLOPT_MAXFILESIZE_LARGE => self::MAX_RESPONSE_BODY,
+            \CURLOPT_MAXFILESIZE => self::MAX_RESPONSE_BODY,
             \CURLOPT_WRITEFUNCTION => static function ($_handle, string $chunk) use (&$buffer, &$tooLarge): int {
                 if (strlen($buffer) + strlen($chunk) > self::MAX_RESPONSE_BODY) {
                     $tooLarge = true;
