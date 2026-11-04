@@ -14,8 +14,10 @@ namespace Fingerly;
  * try {
  *     $event = $fingerly->events->get($requestId);
  * } catch (\Fingerly\ApiException $e) {
- *     if ($e->isEventNotFound()) {
- *         // Not archived yet.
+ *     if ($e->isPending()) {
+ *         // Not recorded yet: read again after $e->getRetryAfter() seconds.
+ *     } elseif ($e->isEventNotFound()) {
+ *         // Never issued, or past retention.
  *     }
  * }
  * ```
@@ -80,7 +82,7 @@ final class ApiException extends \RuntimeException implements FingerlyException
      * its `Retry-After` header, or null when it sent none.
      *
      * The SDK never retries a read itself; this is what a caller's own retry
-     * or queue should honour after a `429`.
+     * or queue should honour after a `429` or a pending event.
      */
     public function getRetryAfter(): ?int
     {
@@ -96,13 +98,26 @@ final class ApiException extends \RuntimeException implements FingerlyException
     }
 
     /**
-     * True when there is no such event.
+     * True when there is no such event: a request id that was never issued,
+     * or one past retention.
      *
-     * One is readable as soon as identification answers, so this means a
-     * request id that was never issued rather than one that has not landed.
+     * It is false for {@see self::isPending()}: that event exists and is
+     * still being recorded.
      */
     public function isEventNotFound(): bool
     {
         return 404 === $this->status && 'event_not_found' === $this->errorCode;
+    }
+
+    /**
+     * True when the API accepted the request id but has not recorded its
+     * event yet (`404 event_pending`).
+     *
+     * Nothing is decided yet: read again after {@see self::getRetryAfter()}
+     * seconds, or verify asynchronously. The SDK never retries by itself.
+     */
+    public function isPending(): bool
+    {
+        return 404 === $this->status && 'event_pending' === $this->errorCode;
     }
 }

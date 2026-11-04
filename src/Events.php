@@ -27,9 +27,11 @@ final class Events
     /**
      * Fetches one event by request id.
      *
-     * @throws ApiException        `404 event_not_found` when there is no such event. One is
-     *                             readable as soon as identification answers, so this means a
-     *                             request id that was never issued
+     * @throws ApiException        `404 event_pending` ({@see ApiException::isPending()}) while
+     *                             the event is still being recorded: retry after
+     *                             {@see ApiException::getRetryAfter()} seconds.
+     *                             `404 event_not_found` for a request id that was never issued,
+     *                             or one past retention
      * @throws TimeoutException
      * @throws ConnectionException
      */

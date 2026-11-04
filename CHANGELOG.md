@@ -29,6 +29,10 @@ The first release. Changes made before it, after the pre-release field test:
 
 ### Event reads
 
+- `ApiException::isPending()` for `404 event_pending`: the event was accepted
+  and is still being recorded, so read again after `getRetryAfter()` seconds.
+  `isEventNotFound()` still matches only `event_not_found` (never issued, or
+  past retention).
 - `ApiException::getRetryAfter()` and `isRateLimited()`; the request id falls
   back on `X-Request-Id`.
 - Response bodies over 4 MiB are refused with `ConnectionException`.

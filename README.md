@@ -109,18 +109,28 @@ code still logs something useful. Reads never retry on their own; after a
 `429` (`$e->isRateLimited()`), wait `getRetryAfter()` seconds before your own
 retry.
 
+A read answers `404` with one of two codes, each with its own predicate:
+
+- `$e->isPending()`: `event_pending`, the request id was accepted and the
+  event is still being recorded. Nothing is decided yet: read again after
+  `getRetryAfter()` seconds (the API sends `Retry-After: 2`), or verify
+  asynchronously. Do not treat it as fraud.
+- `$e->isEventNotFound()`: `event_not_found`, the request id was never issued,
+  or the event is past retention.
+
 ```php
 try {
     $event = $fingerly->events->get($requestId);
 } catch (\Fingerly\ApiException $e) {
-    if ($e->isEventNotFound()) {
-        // Not archived yet.
+    if ($e->isPending()) {
+        // Not decided yet: read again after $e->getRetryAfter() seconds.
+    } elseif ($e->isEventNotFound()) {
+        // Never issued, or past retention.
+    } else {
+        throw $e;
     }
 }
 ```
-
-The one retryable read failure has a predicate, so it needs no status check:
-`$e->isEventNotFound()`.
 
 An option this build does not know is refused rather than ignored, because a
 silently dropped `timeout` or `endpoint` is exactly the kind of thing nobody
@@ -144,16 +154,26 @@ a field the API adds later is reachable without an upgrade.
 
 ## Read an event you just identified
 
-An event is readable as soon as identification answers, so this needs nothing
-special:
+An event is usually readable as soon as identification answers. If it is
+still being recorded, the read throws an `ApiException` whose `isPending()` is
+true and whose `getRetryAfter()` says when to read again:
 
 ```php
-$event = $fingerly->events->get($requestId);
+try {
+    $event = $fingerly->events->get($requestId);
+} catch (\Fingerly\ApiException $e) {
+    if (!$e->isPending()) {
+        throw $e;
+    }
+    // Not recorded yet, so nothing is decided: read again after
+    // $e->getRetryAfter() seconds (2 when null), or verify asynchronously.
+    $event = null;
+}
 ```
 
-Earlier versions had a `waitFor` that polled through the gap between
-identification and the event becoming queryable. There is no gap, so
-`isEventNotFound()` now means a request id that was never issued.
+Retry a pending read a bounded number of times, for example from a queued job.
+`isEventNotFound()` means a request id that was never issued, or one past
+retention, and is never pending.
 
 The archived `document` arrives moments after the event itself, so check
 `hasDocument` rather than assuming it is there.
@@ -162,9 +182,12 @@ The archived `document` arrives moments after the event itself, so check
 
 Read the event with a server-only key. Check that its tag matches your action,
 that it is recent, that its environment is correct, and that it was scored.
-Apply your own policy to the server's verdict. Do not authorize an action using
-scores or visitor identifiers supplied by the browser. Tags correlate events;
-they do not replace your application's authentication or replay protection.
+Apply your own policy to the server's verdict. A pending event
+(`isPending()`) is not a verdict: retry after `getRetryAfter()` seconds or
+verify asynchronously, rather than refusing the action. Do not authorize an
+action using scores or visitor identifiers supplied by the browser. Tags
+correlate events; they do not replace your application's authentication or
+replay protection.
 
 ## Webhooks
 

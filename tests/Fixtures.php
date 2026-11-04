@@ -26,11 +26,20 @@ final class Fixtures
         ], \JSON_THROW_ON_ERROR);
     }
 
-    /** The one retryable failure: the event has not been archived yet. */
+    /** No such event: never issued, or past retention. */
     public static function notFound(): string
     {
         return json_encode([
             'error' => ['code' => 'event_not_found', 'message' => 'No such event', 'status' => 404],
+            'request_id' => 'req_trace',
+        ], \JSON_THROW_ON_ERROR);
+    }
+
+    /** The event was accepted and is still being recorded. */
+    public static function pending(): string
+    {
+        return json_encode([
+            'error' => ['code' => 'event_pending', 'message' => 'Event is still being recorded', 'status' => 404],
             'request_id' => 'req_trace',
         ], \JSON_THROW_ON_ERROR);
     }

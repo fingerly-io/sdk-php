@@ -146,9 +146,8 @@ final class EventsTest extends TestCase
     }
 
     /**
-     * An event is readable as soon as identification answers, so a missing one
-     * means a request id that was never issued. That is reported at once, in
-     * one request: there is nothing to wait for.
+     * A missing event (never issued, or past retention) is reported at once,
+     * in one request: there is nothing to wait for.
      */
     public function testReportsAMissingEventWithoutRetrying(): void
     {
@@ -160,9 +159,46 @@ final class EventsTest extends TestCase
         } catch (ApiException $e) {
             self::assertSame(404, $e->getStatus());
             self::assertTrue($e->isEventNotFound());
+            self::assertFalse($e->isPending());
             self::assertSame('req_trace', $e->getRequestId());
         }
         self::assertSame(1, $this->server->requestCount());
+    }
+
+    /**
+     * An accepted request id whose event is still being recorded is a 404 of
+     * its own: an API error carrying Retry-After, distinct from a missing
+     * event, and never retried by the SDK.
+     */
+    public function testReportsAPendingEventWithRetryAfterWithoutRetrying(): void
+    {
+        $this->server = TestServer::always(404, Fixtures::pending(), ['retry-after' => '2']);
+
+        try {
+            $this->client()->events->get('req_1');
+            self::fail('a pending event should have raised');
+        } catch (ApiException $e) {
+            self::assertSame(404, $e->getStatus());
+            self::assertSame('event_pending', $e->getErrorCode());
+            self::assertTrue($e->isPending());
+            self::assertFalse($e->isEventNotFound());
+            self::assertSame(2, $e->getRetryAfter());
+            self::assertSame('req_trace', $e->getRequestId());
+        }
+        self::assertSame(1, $this->server->requestCount());
+    }
+
+    /** Only a 404 with the pending code is pending. */
+    public function testPendingIsNarrow(): void
+    {
+        $this->server = TestServer::always(429, '{"error":{"code":"event_pending","status":429}}');
+
+        try {
+            $this->client()->events->get('req_1');
+            self::fail('the read should have raised');
+        } catch (ApiException $e) {
+            self::assertFalse($e->isPending());
+        }
     }
 
     /** A plain 404 without the structured code is not the missing-event one. */
