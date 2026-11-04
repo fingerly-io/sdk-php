@@ -74,12 +74,13 @@ final class ProxyRequest
         }
 
         $uri = is_string($_SERVER['REQUEST_URI'] ?? null) ? $_SERVER['REQUEST_URI'] : '/';
-        $path = parse_url($uri, \PHP_URL_PATH);
+        // Not parse_url(): it reads a path starting `//` as a host name.
+        $path = explode('?', $uri, 2)[0];
         $stream = fopen('php://input', 'rb');
 
         return new self(
             method: is_string($_SERVER['REQUEST_METHOD'] ?? null) ? $_SERVER['REQUEST_METHOD'] : 'GET',
-            path: is_string($path) ? $path : '/',
+            path: '' === $path ? '/' : $path,
             headers: $headers,
             body: false === $stream ? '' : $stream,
         );

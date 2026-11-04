@@ -131,16 +131,20 @@ final class Config
     }
 
     /**
-     * Validates the path the dashboard issued for a proxy and drops trailing
-     * slashes. It is matched exactly: the proxy answers that path and nothing
-     * under it.
+     * Validates the path the dashboard issued for a proxy.
+     *
+     * It is matched byte for byte, so it has to be a path a request can carry
+     * unchanged: slash-separated segments of unreserved characters, with no
+     * trailing slash, no empty, `.` or `..` segment, and nothing encoded.
      *
      * @throws ConfigurationException
      */
     public static function normalizePath(mixed $value): string
     {
-        $path = is_string($value) ? rtrim(trim($value), '/') : '';
-        if (!str_starts_with($path, '/') || strlen($path) < 2 || str_contains($path, '?') || str_contains($path, '#')) {
+        $path = is_string($value) ? $value : '';
+        $segments = explode('/', substr($path, 1));
+        if (1 !== preg_match('#\A(?:/[A-Za-z0-9._~-]+)+\z#', $path)
+            || [] !== array_intersect($segments, ['.', '..'])) {
             throw new ConfigurationException('path must be an absolute URL path such as /k7x2qm4a');
         }
 

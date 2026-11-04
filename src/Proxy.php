@@ -179,13 +179,14 @@ final class Proxy
      *
      * An adapter asks first, so a request for the rest of the application is
      * passed straight through rather than refused with a 404 of ours. With a
-     * `path` that is the path, matched exactly with trailing slashes ignored;
-     * without one it is every request, because the framework's route already
+     * `path` that is the path, byte for byte: no trailing or doubled slash, no
+     * dot segment, no percent-encoding and no other case is the proxy's.
+     * Without one it is every request, because the framework's route already
      * chose it.
      */
     public function handles(ProxyRequest $request): bool
     {
-        return null === $this->path || rtrim($request->path, '/') === $this->path;
+        return null === $this->path || $request->path === $this->path;
     }
 
     /**

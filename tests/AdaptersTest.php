@@ -150,6 +150,30 @@ final class AdaptersTest extends TestCase
         self::assertSame(0, $this->server?->requestCount());
     }
 
+    /**
+     * Some PSR-7 stacks fold `//` into `/` when they build the URI, so the
+     * middleware matches the raw request target whenever the runtime gives
+     * one, and a doubled slash is not the proxy's path.
+     */
+    public function testPsr15MiddlewareMatchesTheRawRequestTarget(): void
+    {
+        $factory = new Psr17Factory();
+        $middleware = new Psr15Middleware($this->proxy(), $factory);
+        $normalised = new ServerRequest('POST', 'https://shop.example.com'.self::PATH, [
+            'x-api-key' => TestServer::PUBLIC_KEY,
+        ], '{"signals":{}}', '1.1', ['REQUEST_URI' => '/'.self::PATH.'?x=1']);
+
+        $response = $middleware->process($normalised, $this->applicationHandler($factory));
+
+        self::assertSame('the application answered', (string) $response->getBody());
+        self::assertSame(0, $this->server?->requestCount());
+
+        $exact = new ServerRequest('POST', 'https://shop.example.com'.self::PATH, [
+            'x-api-key' => TestServer::PUBLIC_KEY,
+        ], '{"signals":{}}', '1.1', ['REQUEST_URI' => self::PATH.'?x=1']);
+        self::assertSame(200, $middleware->process($exact, $this->refusingHandler())->getStatusCode());
+    }
+
     public function testLaravelMiddlewareForwardsToTheIngestUrl(): void
     {
         $middleware = new LaravelMiddleware($this->proxy());

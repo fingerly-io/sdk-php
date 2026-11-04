@@ -65,6 +65,12 @@ final class ProxyTest extends TestCase
             ['path' => ''],
             ['path' => '/a?b'],
             ['path' => '/a#b'],
+            ['path' => self::PATH.'/'],
+            ['path' => '//k7x2qm4a'],
+            ['path' => '/a/../b'],
+            ['path' => '/a/./b'],
+            ['path' => '/a%2Fb'],
+            ['path' => ' /k7x2qm4a'],
             ['path' => false],
             ['api_version' => 'beta'],
             ['max_body_bytes' => 0],
@@ -153,20 +159,32 @@ final class ProxyTest extends TestCase
         self::assertSame('abc-123', TestServer::header($this->server->first(), 'idempotency-key'));
     }
 
-    /** Trailing slashes are ignored on both sides. */
-    public function testIgnoresATrailingSlash(): void
+    /**
+     * The path is the proxy's byte for byte. Anything a server, a CDN or a
+     * PSR-7 library might read as the same path is still not it, so nothing
+     * can reach the proxy by a spelling its configuration did not name.
+     */
+    public function testMatchesThePathByteForByte(): void
     {
         $this->server = TestServer::always(200, self::IDENTIFIED);
-        $proxy = new Proxy([
-            'proxy_key' => TestServer::PROXY_KEY,
-            'path' => self::PATH.'/',
-            'upstream' => $this->server->baseUrl(),
-            'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
-        ]);
+        $proxy = $this->proxy();
 
-        self::assertSame(self::PATH, $proxy->path());
-        self::assertSame(200, $proxy->handle($this->identify(self::PATH.'/'))->status);
-        self::assertSame('/api/v1/ingest', $this->server->first()['path']);
+        foreach ([
+            self::PATH.'/',
+            self::PATH.'//',
+            '/'.self::PATH,
+            self::PATH.'/.',
+            '/.'.self::PATH,
+            '/x/..'.self::PATH,
+            self::PATH.'%2F',
+            '/%6B7x2qm4a',
+            strtoupper(self::PATH),
+            self::PATH.' ',
+        ] as $path) {
+            self::assertFalse($proxy->handles($this->identify($path)), $path.' was claimed');
+        }
+        self::assertSame(200, $proxy->handle($this->identify(self::PATH))->status);
+        self::assertSame(1, $this->server->requestCount());
     }
 
     /** Without a path the framework's route has already chosen the request. */
@@ -438,6 +456,10 @@ final class ProxyTest extends TestCase
 
         self::assertSame('POST', $request->method);
         self::assertSame(self::PATH, $request->path);
+
+        // A path that parse_url() would read as a host name stays a path.
+        $_SERVER['REQUEST_URI'] = '/'.self::PATH;
+        self::assertSame('/'.self::PATH, ProxyRequest::fromGlobals()->path);
         self::assertSame(TestServer::PUBLIC_KEY, $request->header('x-api-key'));
         self::assertSame('application/json', $request->header('content-type'));
     }

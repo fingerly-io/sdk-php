@@ -228,10 +228,12 @@ further than the limit.
 ### The path
 
 `path` is optional in the core. Given one, the proxy answers that path and
-nothing else, matched exactly with trailing slashes ignored, so
-`/k7x2qm4a/admin` is not the proxy's. Left out, it answers whatever your
+nothing else, matched byte for byte: `/k7x2qm4a/admin`, `/k7x2qm4a/`,
+`//k7x2qm4a`, `/k7x2qm4a/.`, `/k7x2qm4a%2F` and `/K7X2QM4A` are not the
+proxy's. A query string is ignored. Left out, it answers whatever your
 framework routed to it, which suits a route that already names the path. It
-must start with `/` and carry no query or fragment; anything else is a
+must be slash-separated segments of letters, digits and `-._~`, with no
+trailing slash and no `.` or `..` segment; anything else is a
 `ConfigurationException`.
 
 The three adapters see every request, so each one refuses a `Proxy` without a

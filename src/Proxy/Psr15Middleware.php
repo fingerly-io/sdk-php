@@ -49,7 +49,7 @@ final class Psr15Middleware implements MiddlewareInterface
         // rather than getting a 404 of ours. Match on the path alone first:
         // building the full request reads the body stream, which the
         // application's own handler still needs.
-        if (!$this->proxy->handles(new ProxyRequest($request->getMethod(), $request->getUri()->getPath()))) {
+        if (!$this->proxy->handles(new ProxyRequest($request->getMethod(), self::path($request)))) {
             return $handler->handle($request);
         }
 
@@ -77,10 +77,27 @@ final class Psr15Middleware implements MiddlewareInterface
 
         return new ProxyRequest(
             method: $request->getMethod(),
-            path: $request->getUri()->getPath(),
+            path: self::path($request),
             headers: $headers,
             body: self::readAtMost($stream, $this->proxy->maxBodyBytes() + 1),
         );
+    }
+
+    /**
+     * The path exactly as the request carried it.
+     *
+     * Some PSR-7 implementations normalise the URI they build (folding `//`
+     * into `/`, for one), so the raw request target from the server
+     * parameters is preferred whenever the runtime provides it.
+     */
+    private static function path(ServerRequestInterface $request): string
+    {
+        $raw = $request->getServerParams()['REQUEST_URI'] ?? null;
+        if (is_string($raw) && str_starts_with($raw, '/')) {
+            return explode('?', $raw, 2)[0];
+        }
+
+        return $request->getUri()->getPath();
     }
 
     /**
