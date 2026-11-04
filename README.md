@@ -37,10 +37,30 @@ to route API calls through your own HTTP stack, and
 `psr/http-server-middleware`, `illuminate/http` or `symfony/http-kernel` for
 whichever proxy adapter you mount.
 
+A supplied client takes a PSR-17 `request_factory`, plus a `stream_factory`
+wherever a body is sent: the `Proxy` refuses an `http_client` without both
+factories. With Guzzle (`composer require guzzlehttp/guzzle`), one object is
+both factories:
+
 ```php
-$fingerly = new \Fingerly\Client($secretKey, [
-    'http_client' => $psr18Client,
-    'request_factory' => $psr17Factory,
+// Redirects off and a deadline set: a supplied client owns both (see below).
+$http = new \GuzzleHttp\Client(['allow_redirects' => false, 'timeout' => 5]);
+$factory = new \GuzzleHttp\Psr7\HttpFactory();
+
+$fingerly = new \Fingerly\Client(getenv('FINGERLY_SECRET_KEY'), [
+    'http_client' => $http,
+    'request_factory' => $factory,
+    'stream_factory' => $factory,
+]);
+
+$proxy = new \Fingerly\Proxy([
+    'proxy_key' => getenv('FINGERLY_PROXY_KEY'),
+    'path' => '/k7x2qm4a',
+    // Your CDN's visitor header when present, otherwise the TCP peer.
+    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
+    'http_client' => $http,
+    'request_factory' => $factory,
+    'stream_factory' => $factory,
 ]);
 ```
 
