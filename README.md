@@ -290,6 +290,20 @@ $this->app->singleton(\Fingerly\Client::class, fn () => new \Fingerly\Client(
 \Fingerly\Proxy\LaravelMiddleware::class,
 ```
 
+Under Octane, also add both classes to `warm` in `config/octane.php`. Octane
+gives every request a fresh copy of the container, so a singleton that is not
+warmed is built again on each request, with a new cURL handle, and on PHP 8.1
+to 8.4 a new connection to Fingerly per proxied request:
+
+```php
+// config/octane.php
+'warm' => [
+    ...Octane::defaultServicesToWarm(),
+    \Fingerly\Proxy::class,
+    \Fingerly\Client::class,
+],
+```
+
 Laravel reads and decodes a JSON body when it builds the request, before any
 middleware runs, so under Laravel the 1 MiB limit refuses an oversized body but
 cannot stop it being read into memory first. Cap the body size in the web
@@ -377,6 +391,12 @@ FrankenPHP and RoadRunner, where a worker serves one request at a time. Never
 call them from an event loop (ReactPHP, AMPHP, Revolt, or Swoole and
 OpenSwoole coroutines): one slow answer would stall every request that loop is
 serving. Hand the call to a worker process or a thread pool instead.
+
+Size the worker pool for the slow case, not the average one: while Fingerly is
+slow, every proxied request holds its worker for the whole `timeout`. At 100
+proxied requests a second with 1% of them running into a 5 second timeout, that
+is 5 workers busy on average, before any fast request is served. Run more
+workers than that, or lower `timeout` for the proxy.
 
 `$proxy->handles($request)` answers whether a request is the one the proxy
 owns, so everything else goes to your application untouched rather than getting
