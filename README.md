@@ -1,9 +1,7 @@
 # fingerly/fingerly-php
 
 Server-side event reads, webhook verification and a same-origin proxy for PHP.
-PHP 8.1 or newer, and nothing outside `ext-curl` and `ext-json`. Version 0.1.0
-is prepared for release; the repository is private and the package has not been
-published to Packagist.
+PHP 8.1 or newer, and nothing outside `ext-curl` and `ext-json`.
 
 ```sh
 composer require fingerly/fingerly-php

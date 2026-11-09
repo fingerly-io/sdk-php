@@ -1,0 +1,167 @@
+name: Release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  check:
+    # A manual run from another branch must not release that branch. Packagist
+    # can only read a public repository, and nothing stands between the tag and
+    # the release here, so a private repository stops at this job.
+    if: github.ref == 'refs/heads/main' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      release: ${{ steps.gate.outputs.release }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+      - id: gate
+        run: bash .github/scripts/release-version.sh check >> "$GITHUB_OUTPUT"
+
+  # The tag is the release, so every job ci.yml runs has to pass before it is
+  # cut. These are the same commands as ci.yml.
+  test:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.1", "8.2", "8.3", "8.4", "8.5"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring
+          coverage: none
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - run: composer validate --strict
+      - run: vendor/bin/phpunit
+      - run: vendor/bin/phpstan analyse --no-progress
+
+  adapters:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: "8.1", laravel: "^10.0", symfony: "^6.4" }
+          - { php: "8.2", laravel: "^11.0", symfony: "^7.0" }
+          - { php: "8.3", laravel: "^12.0", symfony: "^7.0" }
+          - { php: "8.4", laravel: "^13.0", symfony: "^8.0" }
+    name: adapters (Laravel ${{ matrix.laravel }}, Symfony ${{ matrix.symfony }}, PHP ${{ matrix.php }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring
+          coverage: none
+      - name: pin the framework majors
+        run: |
+          composer require --dev --no-update --no-interaction \
+            "illuminate/http:${{ matrix.laravel }}" \
+            "symfony/http-kernel:${{ matrix.symfony }}" \
+            "symfony/var-dumper:${{ matrix.symfony }}"
+          composer update --with-all-dependencies --no-interaction --no-progress
+      - run: composer show illuminate/http symfony/http-kernel
+      - run: vendor/bin/phpunit tests/AdaptersTest.php
+      - run: vendor/bin/phpunit
+
+  style:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.3"
+          coverage: none
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - run: vendor/bin/php-cs-fixer fix --dry-run --diff
+
+  dependencies:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.1"
+          extensions: curl, json
+          coverage: none
+      - name: no runtime dependencies
+        run: |
+          composer install --no-dev --no-interaction --quiet
+          installed=$(composer show --no-dev --name-only 2>/dev/null | sed '/^$/d' | wc -l)
+          if [ "$installed" -ne 0 ]; then
+            echo "the package acquired a runtime dependency:"; composer show --no-dev; exit 1
+          fi
+      - name: the package ships only the library
+        run: |
+          shipped=$(git archive HEAD | tar -t | grep -v -E '^(src/.*|LICENSE|README\.md|CHANGELOG\.md|composer\.json)$' || true)
+          if [ -n "$shipped" ]; then
+            echo "the package would also ship:"; echo "$shipped"; exit 1
+          fi
+      - name: the core works without a single vendor package
+        run: |
+          php -r '
+            require "vendor/autoload.php";
+            $ok = Fingerly\Webhook::verify(
+                secret: "whsec_x",
+                payload: "{}",
+                timestamp: (string) time(),
+                signature: "sha256=".hash_hmac("sha256", time().".{}", "whsec_x"),
+            );
+            if (!$ok) { fwrite(STDERR, "verification failed\n"); exit(1); }
+            new Fingerly\Client("fly_sk_production_ci");
+            new Fingerly\Proxy([
+                "proxy_key" => "fly_px_production_ci",
+                "client_ip" => fn ($r) => "203.0.113.7",
+            ]);
+            echo "the dependency-free build works", PHP_EOL;
+          '
+
+  publish:
+    needs: [check, test, adapters, style, dependencies]
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: bash .github/scripts/release-version.sh consistency
+      - name: tag and release
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
