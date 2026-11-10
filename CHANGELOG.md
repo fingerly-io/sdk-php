@@ -24,6 +24,15 @@ The first release. Changes made before it, after the pre-release field test:
   longer consumes the body of requests for other routes.
 - The adapters match the path before building a request, so other routes pay
   nothing for them.
+- Laravel and Symfony no longer answer `/index.php/<path>`: `getPathInfo()`
+  strips a spelled-out front controller, which is not the configured path.
+- A control character in a visitor's `User-Agent`, `Origin`, `Idempotency-Key`
+  or `Content-Type` drops that value instead of being copied upstream, so it
+  cannot add a header to the upstream request.
+- An upstream status outside 200 to 599 answers `502` instead of making the
+  framework throw while building the response.
+- A `HEAD` refusal is empty, so servers that write what they are handed
+  (Swoole) cannot desynchronise a kept-alive connection.
 - A supplied PSR-18 client now needs both `request_factory` and
   `stream_factory`.
 

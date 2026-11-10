@@ -417,7 +417,8 @@ The three adapters see every request, so each one refuses a `Proxy` without a
 The path is matched against the application-relative path: `getPathInfo()`
 under Laravel and Symfony, and the PSR-7 URI path under PSR-15. It is never the
 whole request URI, because a deployment under a sub-URI carries a prefix the
-configuration knows nothing about. Add the PSR-15 middleware to the whole
+configuration knows nothing about, and a spelled-out front controller such as
+`/index.php/k7x2qm4a` is not the path. Add the PSR-15 middleware to the whole
 application or to that one route, not under a path your router strips.
 
 Use the path the dashboard issued. Blockers look for words such as

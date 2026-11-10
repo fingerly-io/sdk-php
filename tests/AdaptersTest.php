@@ -286,6 +286,61 @@ final class AdaptersTest extends TestCase
         self::assertSame('/api/v1/ingest', $this->server?->first()['path']);
     }
 
+    /**
+     * getPathInfo() strips a front-controller name the request spelled out,
+     * so `/index.php/k7x2qm4a` must not count as the path: the proxy answers
+     * one exact target, not every spelling of it.
+     */
+    public function testLaravelMiddlewareRefusesAFrontControllerSpelling(): void
+    {
+        $middleware = new LaravelMiddleware($this->proxy());
+        $request = LaravelRequest::create('/index.php/k7x2qm4a', 'POST', [], [], [], [
+            'SCRIPT_FILENAME' => '/var/www/public/index.php',
+            'SCRIPT_NAME' => '/index.php',
+            'PHP_SELF' => '/index.php',
+            'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'CONTENT_TYPE' => 'application/json',
+        ], '{"signals":{}}');
+
+        self::assertSame(self::PATH, $request->getPathInfo());
+        $response = $middleware->handle(
+            $request,
+            static fn (LaravelRequest $r): SymfonyResponse => new SymfonyResponse('the application answered', 200),
+        );
+
+        self::assertSame('the application answered', $response->getContent());
+        self::assertSame(0, $this->server?->requestCount());
+    }
+
+    public function testSymfonyListenerRefusesAFrontControllerSpelling(): void
+    {
+        $listener = new SymfonyListener($this->proxy());
+        $request = SymfonyRequest::create('/index.php/k7x2qm4a', 'POST', [], [], [], [
+            'SCRIPT_FILENAME' => '/var/www/public/index.php',
+            'SCRIPT_NAME' => '/index.php',
+            'PHP_SELF' => '/index.php',
+            'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'CONTENT_TYPE' => 'application/json',
+        ], '{"signals":{}}');
+        self::assertSame(self::PATH, $request->getPathInfo());
+
+        $kernel = new class implements HttpKernelInterface {
+            public function handle(
+                SymfonyRequest $request,
+                int $type = self::MAIN_REQUEST,
+                bool $catch = true,
+            ): SymfonyResponse {
+                return new SymfonyResponse('the application answered');
+            }
+        };
+        $event = new RequestEvent($kernel, $request, HttpKernelInterface::MAIN_REQUEST);
+
+        $listener->onKernelRequest($event);
+
+        self::assertNull($event->getResponse());
+        self::assertSame(0, $this->server?->requestCount());
+    }
+
     public function testSymfonyListenerForwardsToTheIngestUrl(): void
     {
         $listener = new SymfonyListener($this->proxy());

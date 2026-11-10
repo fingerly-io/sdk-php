@@ -223,6 +223,22 @@ final class ProxyTest extends TestCase
     }
 
     /** The path is matched exactly: nothing under it and nothing beside it. */
+    /**
+     * A HEAD answer carrying a body desynchronises a kept-alive connection on
+     * servers that write whatever they are handed, so a HEAD refusal is empty.
+     */
+    public function testAHeadRefusalHasNoBody(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $proxy = $this->proxy();
+
+        foreach ([self::PATH, '/not-the-proxy'] as $path) {
+            $response = $proxy->handle(new ProxyRequest('HEAD', $path, ['x-api-key' => TestServer::PUBLIC_KEY], ''));
+            self::assertSame(self::PATH === $path ? 405 : 404, $response->status);
+            self::assertSame('', $response->body);
+        }
+    }
+
     public function testRefusesEveryPathButItsOwn(): void
     {
         $this->server = TestServer::always(200, self::IDENTIFIED);
@@ -369,6 +385,48 @@ final class ProxyTest extends TestCase
 
         self::assertSame(429, $response->status);
         self::assertStringContainsString('rate_limited', $response->body);
+    }
+
+    /**
+     * An HTTP stack that receives a status outside 200 to 599 throws building
+     * the response, so relaying one would surface a framework error page
+     * from the proxy that must never throw.
+     */
+    public function testAnswers502WhenTheUpstreamStatusIsOutOfRange(): void
+    {
+        $this->server = TestServer::always(600, self::IDENTIFIED);
+        $lines = [];
+        $proxy = $this->failingProxy($this->server->baseUrl(), $lines);
+
+        $this->assertGatewayFailure($proxy->handle($this->identify(self::PATH)), 502, 'Bad gateway');
+        self::assertCount(1, $lines);
+        self::assertStringContainsString('600', $lines[0]);
+    }
+
+    /**
+     * A value with a line break must never reach cURL, which writes it to the
+     * wire as given: a visitor could otherwise add headers of their choosing,
+     * x-fingerly-client-ip among them, to the upstream request.
+     */
+    public function testNeverCopiesALineBreakIntoAnUpstreamHeader(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $this->proxy()->handle($this->identify(self::PATH, [
+            'user-agent' => "Mozilla\r\nx-evil-ua: 1",
+            'origin' => "https://a.example\r\nx-evil-origin: 1",
+            'idempotency-key' => "abc\nx-evil-idem: 1",
+            'content-type' => "application/json\r\nx-evil-type: 1",
+        ]));
+
+        $forwarded = $this->server->first();
+        self::assertSame('', TestServer::header($forwarded, 'x-evil-ua'));
+        self::assertSame('', TestServer::header($forwarded, 'x-evil-origin'));
+        self::assertSame('', TestServer::header($forwarded, 'x-evil-idem'));
+        self::assertSame('', TestServer::header($forwarded, 'x-evil-type'));
+        self::assertSame('', TestServer::header($forwarded, 'x-fingerly-user-agent'));
+        self::assertSame('', TestServer::header($forwarded, 'x-fingerly-origin'));
+        self::assertSame('', TestServer::header($forwarded, 'idempotency-key'));
+        self::assertSame('application/json', TestServer::header($forwarded, 'content-type'));
     }
 
     public function testSendsNoBodyOnAStatusThatMayNotCarryOne(): void

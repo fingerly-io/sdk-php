@@ -220,11 +220,15 @@ final class Proxy
      */
     public function handle(ProxyRequest $request): ProxyResponse
     {
+        // A body on a HEAD answer would be read as the start of the next
+        // response on a kept-alive connection, and some servers (Swoole among
+        // them) write whatever they are handed.
+        $head = 'HEAD' === strtoupper($request->method);
         if (!$this->handles($request)) {
-            return self::refuse(404, 'Not Found');
+            return self::refuse(404, $head ? '' : 'Not Found');
         }
         if ('POST' !== strtoupper($request->method)) {
-            return self::refuse(405, 'Method Not Allowed', ['allow' => 'POST']);
+            return self::refuse(405, $head ? '' : 'Method Not Allowed', ['allow' => 'POST']);
         }
 
         $apiKey = $this->upstreamKeyFor($request->header('x-api-key'));
@@ -268,9 +272,19 @@ final class Proxy
             return self::refuse(502, 'Bad gateway');
         }
 
+        // The frameworks and PSR-7 libraries throw on a status outside this
+        // range when the response is built, which would turn it into their
+        // own error page; the upstream is the one answering, so it is its
+        // failure.
+        $status = $response['status'];
+        if ($status < 200 || $status > 599) {
+            $this->report(sprintf('upstream answered an invalid status %d', $status));
+
+            return self::refuse(502, 'Bad gateway');
+        }
+
         // A success the browser cannot read would be shown as a wrong result
         // rather than retried, so a 2xx must carry the JSON it promises.
-        $status = $response['status'];
         if ($status >= 200 && $status < 300 && '' !== $response['body']
             && !in_array($status, self::BODILESS_STATUSES, true)
             && null === json_decode($response['body'], true)) {
@@ -397,25 +411,38 @@ final class Proxy
      */
     private function upstreamHeaders(ProxyRequest $request, #[\SensitiveParameter] string $apiKey, string $clientIp): array
     {
-        $contentType = $request->header('content-type');
+        $contentType = self::copyable($request->header('content-type'));
         $headers = [
             'content-type' => '' !== $contentType ? $contentType : 'application/json',
             'x-api-key' => $apiKey,
             'x-fingerly-client-ip' => $clientIp,
-            'x-fingerly-origin' => $request->header('origin'),
-            'x-fingerly-user-agent' => $request->header('user-agent'),
+            'x-fingerly-origin' => self::copyable($request->header('origin')),
+            'x-fingerly-user-agent' => self::copyable($request->header('user-agent')),
             'x-fingerly-proxy-version' => self::PROXY_VERSION,
             'user-agent' => Transport::USER_AGENT,
         ];
         if ($this->usesProxyKey) {
             $headers['x-fingerly-proxy-key'] = $this->key->reveal();
         }
-        $idempotency = $request->header('idempotency-key');
+        $idempotency = self::copyable($request->header('idempotency-key'));
         if ('' !== $idempotency) {
             $headers['idempotency-key'] = $idempotency;
         }
 
         return $headers;
+    }
+
+    /**
+     * A visitor-supplied header value that is safe to copy upstream, or `''`.
+     *
+     * cURL writes a header line as given, so a value holding a line break
+     * would add headers of the visitor's choosing to the upstream request,
+     * `x-fingerly-client-ip` among them. No browser sends one; drop the value
+     * rather than fail the identification over it.
+     */
+    private static function copyable(string $value): string
+    {
+        return 1 === preg_match('/[\x00-\x08\x0a-\x1f\x7f]/', $value) ? '' : $value;
     }
 
     /**

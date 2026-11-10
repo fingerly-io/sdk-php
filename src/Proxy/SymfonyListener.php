@@ -65,12 +65,25 @@ final class SymfonyListener implements EventSubscriberInterface
         $request = $event->getRequest();
         // Match on the path alone first, so other routes never pay for the
         // header copy or a body stream.
-        if (!$this->proxy->handles(new ProxyRequest($request->getMethod(), $request->getPathInfo()))) {
+        if (!$this->proxy->handles(new ProxyRequest($request->getMethod(), self::path($request)))) {
             return;
         }
 
         $answer = $this->proxy->handle($this->toProxyRequest($request));
         $event->setResponse(new Response($answer->body, $answer->status, $answer->headers));
+    }
+
+    /**
+     * The application-relative path, but only when the raw request target is
+     * exactly the base path plus it. getPathInfo() also strips a
+     * front-controller name the request spelled out, and `/index.php/k7x2qm4a`
+     * is not the path the proxy was given.
+     */
+    private static function path(Request $request): string
+    {
+        $raw = explode('?', $request->getRequestUri(), 2)[0];
+
+        return $raw === $request->getBasePath().$request->getPathInfo() ? $request->getPathInfo() : $raw;
     }
 
     private function toProxyRequest(Request $request): ProxyRequest
@@ -84,7 +97,7 @@ final class SymfonyListener implements EventSubscriberInterface
 
         return new ProxyRequest(
             method: $request->getMethod(),
-            path: $request->getPathInfo(),
+            path: self::path($request),
             headers: $headers,
             body: is_resource($body) ? $body : (string) $request->getContent(),
             remoteAddress: is_string($remote = $request->server->get('REMOTE_ADDR')) ? $remote : null,
