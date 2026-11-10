@@ -54,7 +54,9 @@ jobs:
             "symfony/http-kernel:${{ matrix.symfony }}" \
             "symfony/var-dumper:${{ matrix.symfony }}"
           composer update --with-all-dependencies --no-interaction --no-progress
-      - run: composer show illuminate/http symfony/http-kernel
+      # `composer show` takes one package, a second argument is read as a version.
+      - name: the framework versions under test
+        run: composer show | grep -E "^(illuminate/http|symfony/http-kernel) "
       - run: vendor/bin/phpunit tests/AdaptersTest.php
       - run: vendor/bin/phpunit
 
