@@ -27,16 +27,25 @@ final class Events
     /**
      * Fetches one event by request id.
      *
-     * @throws ApiException        `404 event_pending` ({@see ApiException::isPending()}) while
-     *                             the event is still being recorded: retry after
-     *                             {@see ApiException::getRetryAfter()} seconds.
-     *                             `404 event_not_found` for a request id that was never issued,
-     *                             or one past retention
+     * @throws ApiException           `404 event_pending` ({@see ApiException::isPending()}) while
+     *                                the event is still being recorded: retry after
+     *                                {@see ApiException::getRetryAfter()} seconds.
+     *                                `404 event_not_found` for a request id that was never issued,
+     *                                or one past retention
+     * @throws ConfigurationException if the request id is empty, `.` or `..`
      * @throws TimeoutException
      * @throws ConnectionException
      */
     public function get(string $requestId): Event
     {
+        // URL resolvers treat a dot segment as one even when it is
+        // percent-encoded, so escaping cannot keep these in the path: `.` and
+        // the empty id would name the list route, and `..` a route above it,
+        // secret key attached.
+        if ('' === $requestId || '.' === $requestId || '..' === $requestId) {
+            throw new ConfigurationException('requestId is not a Fingerly request id');
+        }
+
         return Event::fromArray($this->read('/events/'.rawurlencode($requestId)));
     }
 

@@ -51,6 +51,37 @@ final class EventsTest extends TestCase
         self::assertSame('', $request['query']);
     }
 
+    /**
+     * Escaping leaves dots alone and cURL resolves dot segments, so `..` would
+     * address a route above /events with the secret key, and `` or `.` the
+     * event list. They are refused before anything is sent.
+     */
+    public function testRefusesARequestIdThatIsADotSegment(): void
+    {
+        $this->server = TestServer::always(200, Fixtures::event());
+        $client = $this->client();
+
+        foreach (['', '.', '..'] as $requestId) {
+            try {
+                $client->events->get($requestId);
+                self::fail(sprintf('request id "%s" should have been refused', $requestId));
+            } catch (ConfigurationException $e) {
+                self::assertNotSame('', $e->getMessage());
+            }
+        }
+        self::assertSame(0, $this->server->requestCount(), 'a dot-segment request id was sent');
+    }
+
+    /** Only a whole dot segment is refused: a dot inside an id is ordinary. */
+    public function testReadsARequestIdThatContainsADot(): void
+    {
+        $this->server = TestServer::always(200, Fixtures::event('a.b'));
+        $event = $this->client()->events->get('a.b');
+
+        self::assertSame('a.b', $event->requestId);
+        self::assertSame('/api/v1/events/a.b', $this->server->first()['path']);
+    }
+
     /** null means unscored and must never be read as zero. */
     public function testAnUnscoredEventIsNotAZero(): void
     {

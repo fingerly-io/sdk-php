@@ -19,7 +19,7 @@ namespace Fingerly;
 final class Client
 {
     /** The SDK version, reported to the API on every request. */
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.1.1';
 
     private const DEFAULT_TIMEOUT = 5.0;
 

@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.1
+
+### Security
+
+- `Events::get()` refuses an empty request id, `.` and `..` with
+  `ConfigurationException` before sending anything. Escaping leaves dots
+  alone and cURL resolves dot segments, so `..` reached a route above
+  `/events` with the secret key attached, and the empty id or `.` read the
+  event list in place of one event. The request id usually comes from the
+  browser, so upgrade if you pass it through unchecked. A dot inside an id,
+  such as `a.b`, is still read as before.
+
+## 0.1.0
 
 The first release. Changes made before it, after the pre-release field test:
 
