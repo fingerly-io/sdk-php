@@ -217,7 +217,7 @@ final class Transport
         }
         curl_setopt_array($handle, $options);
         if (null !== $this->share) {
-            // A CurlSharePersistentHandle, which PHP 8.5 added and the 8.1
+            // A CurlSharePersistentHandle, which PHP 8.5 added and the 8.2
             // stubs this is analysed against do not know.
             curl_setopt($handle, \CURLOPT_SHARE, $this->share); // @phpstan-ignore argument.type
         }

@@ -1,7 +1,12 @@
 # fingerly/fingerly-php
 
 Server-side event reads, webhook verification and a same-origin proxy for PHP.
-PHP 8.1 or newer, and nothing outside `ext-curl` and `ext-json`.
+PHP 8.2 or newer, and nothing outside `ext-curl` and `ext-json`.
+
+Run a PHP release that has the October 2026 security fixes for CVE-2026-109618
+and CVE-2026-109619: 8.5.12, 8.4.27, 8.3.36, 8.2.35 or later. Those flaws are in
+PHP itself and let an unauthenticated request run code on the server, so an
+unpatched runtime puts everything on it at risk, this SDK's secret key included.
 
 ```sh
 composer require fingerly/fingerly-php
@@ -81,7 +86,7 @@ A client or proxy keeps one cURL handle and reuses its connection, so a
 long-running worker (Octane, FrankenPHP, RoadRunner) opens one connection to
 Fingerly and keeps it. On PHP 8.5 and later the connection, DNS and TLS session
 caches are also shared across the requests a PHP-FPM worker serves, so a client
-built per request reuses them too. On PHP 8.1 to 8.4 under PHP-FPM each request
+built per request reuses them too. On PHP 8.2 to 8.4 under PHP-FPM each request
 that builds a new client opens a new connection; at a few hundred proxied
 requests a second per host, run PHP 8.5 or a worker runtime. No cookies are
 kept, and redirects are never followed.
@@ -290,7 +295,7 @@ $this->app->singleton(\Fingerly\Client::class, fn () => new \Fingerly\Client(
 
 Under Octane, also add both classes to `warm` in `config/octane.php`. Octane
 gives every request a fresh copy of the container, so a singleton that is not
-warmed is built again on each request, with a new cURL handle, and on PHP 8.1
+warmed is built again on each request, with a new cURL handle, and on PHP 8.2
 to 8.4 a new connection to Fingerly per proxied request:
 
 ```php
@@ -480,7 +485,7 @@ weakening, so it is left alone.
 ```sh
 composer install
 composer test           # phpunit
-composer stan           # phpstan, level 8, checked against the 8.1 floor
+composer stan           # phpstan, level 8, checked against the 8.2 floor
 composer fmt:check      # php-cs-fixer
 composer contract:sync  # refresh the vendored contract snapshot
 ```
