@@ -60,6 +60,7 @@ final class ContractTest extends TestCase
 
             self::assertSame($body['request_id'], $event->requestId, $fixture['name']);
             self::assertSame($body['visitor_id'], $event->visitorId, $fixture['name']);
+            self::assertSame($body['project_id'] ?? null, $event->projectId, $fixture['name']);
 
             // A fixture without a score must not decode as zero.
             if (!array_key_exists('suspect_score', $body) || null === $body['suspect_score']) {
@@ -97,6 +98,7 @@ final class ContractTest extends TestCase
 
             foreach ($page->rows as $index => $row) {
                 self::assertSame($body['rows'][$index]['request_id'], $row->requestId, $fixture['name']);
+                self::assertSame($body['rows'][$index]['project_id'] ?? null, $row->projectId, $fixture['name']);
             }
         }
     }

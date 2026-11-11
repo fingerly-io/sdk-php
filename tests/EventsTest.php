@@ -93,6 +93,27 @@ final class EventsTest extends TestCase
         self::assertNull($event->suspectLevel);
     }
 
+    /** The project an event belongs to is exposed when the server sends it. */
+    public function testExposesTheProjectAnEventBelongsTo(): void
+    {
+        $body = json_decode(Fixtures::event(), true, 32, \JSON_THROW_ON_ERROR);
+        $body['project_id'] = '0199a963-e400-7000-8000-0000000000a1';
+        $this->server = TestServer::always(200, json_encode($body, \JSON_THROW_ON_ERROR));
+
+        $event = $this->client()->events->get('req_1');
+        self::assertSame('0199a963-e400-7000-8000-0000000000a1', $event->projectId);
+    }
+
+    /** An older server sends no `project_id`; the event still decodes. */
+    public function testAnEventWithoutAProjectStillDecodes(): void
+    {
+        $this->server = TestServer::always(200, Fixtures::event());
+        $event = $this->client()->events->get('req_1');
+
+        self::assertSame('req_1', $event->requestId);
+        self::assertNull($event->projectId);
+    }
+
     /** A field the API adds after this build shipped is still reachable. */
     public function testKeepsTheResponseBodyAsItArrived(): void
     {
