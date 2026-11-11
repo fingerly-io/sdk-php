@@ -18,7 +18,7 @@ final class Fixtures
             'platform' => 'web',
             'sdk_platform' => 'web',
             'sdk_version' => '1.0.0',
-            'ip_address' => '203.0.113.7',
+            'ip_network' => '203.0.113.0/24',
             'suspect_score' => $score,
             'suspect_level' => null === $score ? null : 'low',
             'triggers' => [],

@@ -9,9 +9,8 @@ namespace Fingerly;
  *
  * It mirrors the server schema with two deliberate differences:
  * {@see self::$suspectScore} is `null` when the request was not scored and
- * must never be read as zero, and the archived `document` and
- * `deferredSignals` stay opaque arrays rather than becoming a second public
- * contract.
+ * must never be read as zero, and the archived `document` stays an opaque
+ * array rather than becoming a second public contract.
  */
 final class Event
 {
@@ -25,7 +24,6 @@ final class Event
      *                                                    `react-native-ios` reports itself as such and is scored as `ios`
      * @param string                    $sdkPlatform      what the SDK called itself
      * @param string                    $sdkVersion       the SDK build that submitted the identification
-     * @param string                    $ipAddress        the address the identification arrived from
      * @param null|int                  $suspectScore     null when the request was not scored; never read null as 0
      * @param null|string               $suspectLevel     `low`, `medium` or `high`; null when not scored
      * @param list<EventTrigger>        $triggers         never null from the API: an event about which nothing fired
@@ -35,6 +33,9 @@ final class Event
      * @param null|string               $urlHost          the host of the page the identification was made from
      * @param null|string               $urlPath          the path of that page
      * @param null|string               $tag              your own reference, as the client sent it
+     * @param null|string               $ipNetwork        the network the request came from: an IPv4 /24 or an IPv6
+     *                                                    /40, such as `203.0.113.0/24`; the API never returns the
+     *                                                    address itself
      * @param null|string               $countryCode      ISO 3166-1 alpha-2 country the address resolved to
      * @param null|string               $countryName      the country's name, as the geolocation database spells it
      * @param null|string               $asn              the autonomous system announcing the address
@@ -46,9 +47,12 @@ final class Event
      * @param null|string               $os               the operating system family
      * @param null|string               $deviceKind       `desktop`, `mobile`, `tablet` or similar
      * @param null|string               $visitorKind      what the visitor appears to be, such as `human` or `bot`
-     * @param null|array<string, mixed> $document         the archived submission with the threshold and weights that
-     *                                                    scored it; deliberately opaque, not a public contract
-     * @param null|array<string, mixed> $deferredSignals  the deferred report attached to this request; also opaque
+     * @param null|array<string, mixed> $document         an allow-listed view of the archived submission: schema,
+     *                                                    request id, time, SDK platform and version, IP network,
+     *                                                    the classified IP (network, city-level location,
+     *                                                    detections) or its error, risk, attestation and velocity;
+     *                                                    no raw signals, user agent or address. Deliberately
+     *                                                    opaque, not a public contract
      * @param array<string, mixed>      $raw              the response body exactly as it arrived, so a field the API adds
      *                                                    after this SDK was released is still reachable
      * @param null|string               $projectId        the Fingerly project the event belongs to, as a UUID string;
@@ -63,7 +67,6 @@ final class Event
         public readonly string $platform,
         public readonly string $sdkPlatform,
         public readonly string $sdkVersion,
-        public readonly string $ipAddress,
         public readonly ?int $suspectScore,
         public readonly ?string $suspectLevel,
         public readonly array $triggers,
@@ -72,6 +75,7 @@ final class Event
         public readonly ?string $urlHost = null,
         public readonly ?string $urlPath = null,
         public readonly ?string $tag = null,
+        public readonly ?string $ipNetwork = null,
         public readonly ?string $countryCode = null,
         public readonly ?string $countryName = null,
         public readonly ?string $asn = null,
@@ -83,7 +87,6 @@ final class Event
         public readonly ?string $deviceKind = null,
         public readonly ?string $visitorKind = null,
         public readonly ?array $document = null,
-        public readonly ?array $deferredSignals = null,
         public readonly array $raw = [],
         public readonly ?string $projectId = null,
     ) {}
@@ -120,7 +123,6 @@ final class Event
             platform: Json::string($body, 'platform'),
             sdkPlatform: Json::string($body, 'sdk_platform'),
             sdkVersion: Json::string($body, 'sdk_version'),
-            ipAddress: Json::string($body, 'ip_address'),
             suspectScore: Json::nullableInt($body, 'suspect_score'),
             suspectLevel: Json::nullableString($body, 'suspect_level'),
             triggers: EventTrigger::listFrom($body['triggers'] ?? []),
@@ -129,6 +131,7 @@ final class Event
             urlHost: Json::nullableString($body, 'url_host'),
             urlPath: Json::nullableString($body, 'url_path'),
             tag: Json::nullableString($body, 'tag'),
+            ipNetwork: Json::nullableString($body, 'ip_network'),
             countryCode: Json::nullableString($body, 'country_code'),
             countryName: Json::nullableString($body, 'country_name'),
             asn: Json::nullableString($body, 'asn'),
@@ -140,7 +143,6 @@ final class Event
             deviceKind: Json::nullableString($body, 'device_kind'),
             visitorKind: Json::nullableString($body, 'visitor_kind'),
             document: Json::nullableArray($body, 'document'),
-            deferredSignals: Json::nullableArray($body, 'deferred_signals'),
             raw: $body,
             projectId: Json::nullableString($body, 'project_id'),
         );

@@ -3,9 +3,16 @@
 ## Unreleased
 
 - `Event::$projectId` exposes the Fingerly project an event belongs to, on
-  single reads and listing rows. It is `null` from servers older than projects.
-- The vendored contract snapshot adds `project_id` to event fixtures and to the
-  webhook test payloads, which webhooks carry as `$data['project_id']`.
+  single reads and listing rows. It is `null` when the server does not send
+  it. Webhooks carry it as `$data['project_id']`.
+- `Event::$ipAddress` is gone; the API no longer returns the address. The new
+  `Event::$ipNetwork` (`?string`) holds the network the request came from: an
+  IPv4 /24 or an IPv6 /40, such as `203.0.113.0/24`.
+- `Event::$deferredSignals` is gone; the single-event read no longer returns
+  the deferred report.
+- `Event::$document` is now an allow-listed view of the archived submission
+  (no raw signals, user agent or address). It stays an opaque array.
+- The vendored contract snapshot is refreshed.
 
 ## 0.1.1
 
