@@ -51,6 +51,8 @@ final class Event
      * @param null|array<string, mixed> $deferredSignals  the deferred report attached to this request; also opaque
      * @param array<string, mixed>      $raw              the response body exactly as it arrived, so a field the API adds
      *                                                    after this SDK was released is still reachable
+     * @param null|string               $projectId        the Fingerly project the event belongs to, as a UUID string;
+     *                                                    null when the server predates projects
      */
     public function __construct(
         public readonly string $requestId,
@@ -83,6 +85,7 @@ final class Event
         public readonly ?array $document = null,
         public readonly ?array $deferredSignals = null,
         public readonly array $raw = [],
+        public readonly ?string $projectId = null,
     ) {}
 
     /**
@@ -139,6 +142,7 @@ final class Event
             document: Json::nullableArray($body, 'document'),
             deferredSignals: Json::nullableArray($body, 'deferred_signals'),
             raw: $body,
+            projectId: Json::nullableString($body, 'project_id'),
         );
     }
 }
