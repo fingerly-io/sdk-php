@@ -1,32 +1,81 @@
-# fingerly/fingerly-php
+<p align="center">
+  <a href="https://fingerly.io">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/fingerly-io/.github/main/assets/logo-dark.svg">
+      <img src="https://raw.githubusercontent.com/fingerly-io/.github/main/assets/logo-light.svg" alt="Fingerly" height="44">
+    </picture>
+  </a>
+</p>
 
-Server-side event reads, webhook verification and a same-origin proxy for PHP.
-PHP 8.2 or newer, and nothing outside `ext-curl` and `ext-json`.
+<p align="center"><b>Fingerly for PHP</b><br>Read device intelligence events, verify webhooks and serve the browser SDK from your own domain.</p>
 
-Run a PHP release that has the October 2026 security fixes for CVE-2026-109618
-and CVE-2026-109619: 8.5.12, 8.4.27, 8.3.36, 8.2.35 or later. Those flaws are in
-PHP itself and let an unauthenticated request run code on the server, so an
-unpatched runtime puts everything on it at risk, this SDK's secret key included.
+<p align="center">
+  <a href="https://packagist.org/packages/fingerly/fingerly-php"><img src="https://img.shields.io/packagist/v/fingerly/fingerly-php?style=flat-square" alt="Packagist version"></a>
+  <a href="https://github.com/fingerly-io/sdk-php/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fingerly-io/sdk-php/ci.yml?style=flat-square&label=ci" alt="CI status"></a>
+  <a href="https://github.com/fingerly-io/sdk-php/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License: Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/php-%E2%89%A5%208.2-777BB4?style=flat-square" alt="PHP 8.2 or newer">
+  <a href="https://docs.fingerly.io/docs/sdks/php"><img src="https://img.shields.io/badge/docs-docs.fingerly.io-111827?style=flat-square" alt="Documentation"></a>
+</p>
 
-```sh
-composer require fingerly/fingerly-php
-```
+<p align="center"><img src="https://raw.githubusercontent.com/fingerly-io/.github/main/assets/banner.webp" alt="Fingerly" width="100%"></p>
 
-```php
-$fingerly = new \Fingerly\Client(getenv('FINGERLY_SECRET_KEY'));
+## What is this
 
-$event = $fingerly->events->get($requestId);
-$page = $fingerly->events->list(['level' => 'high', 'limit' => 50]);
-```
+`fingerly/fingerly-php` is the server-side SDK for PHP. It reads Fingerly events
+with a secret key, verifies webhook signatures and relays the browser SDK's
+traffic through your own domain with a same-origin proxy, with adapters for
+Laravel, Symfony and PSR-15. It needs nothing outside `ext-curl` and `ext-json`
+and is for backends that protect signups, logins and payments from fraud and
+abuse. [Fingerly](https://fingerly.io) identifies the device behind each session
+and scores how suspicious it is.
 
-Event reads require `fly_sk_{production|staging|development}_…` keys. Requests
-go to `https://api.fingerly.io`; the `endpoint` option overrides that for a
-local API. Public, proxy, management, malformed and unsupported keys are
-rejected before network access. Requests do not follow redirects. `get` and
-`list` each perform one request and never retry.
+## Getting started
 
-Construct the client once and reuse it. Every option is validated in the
-constructor, so an invalid key or endpoint throws before anything is sent.
+1. **Prerequisites.** A Fingerly account and a secret key (`fly_sk_...`). See
+   [API keys and environments](https://docs.fingerly.io/docs/api-keys). PHP 8.2
+   or newer, and nothing outside `ext-curl` and `ext-json`. Run a PHP release
+   with the October 2026 security fixes (see [Requirements](#requirements)).
+2. **Install.**
+
+   ```sh
+   composer require fingerly/fingerly-php
+   ```
+
+3. **Read an event.**
+
+   ```php
+   $fingerly = new \Fingerly\Client(getenv('FINGERLY_SECRET_KEY'));
+
+   $event = $fingerly->events->get($requestId);
+   $page = $fingerly->events->list(['level' => 'high', 'limit' => 50]);
+   ```
+
+4. **Verify a webhook.**
+
+   ```php
+   $valid = \Fingerly\Webhook::verify(
+       secret: getenv('FINGERLY_WEBHOOK_SECRET'),
+       payload: $request->getContent(),   // the exact bytes, before any parsing
+       timestamp: $request->header('x-fingerly-timestamp'),
+       signature: $request->header('x-fingerly-signature'),
+   );
+   abort_unless($valid, 400);
+
+   $event = \Fingerly\Webhook::parse($request->getContent());
+   ProcessFingerlyEvent::dispatch($event->id);   // deduplicate on the ID
+   ```
+
+Full guide: [docs.fingerly.io/docs/sdks/php](https://docs.fingerly.io/docs/sdks/php).
+
+## Choose what you need
+
+| I want to | Use | Read |
+| --- | --- | --- |
+| Read an event after the browser identified a visitor | `\Fingerly\Client` and `events->get` / `events->list` | [Read events](#read-events) |
+| Check a webhook delivery is genuine | `\Fingerly\Webhook::verify` and `::parse` | [Verify webhooks](#verify-webhooks) |
+| Keep the browser SDK first-party, away from content blockers | `\Fingerly\Proxy` with a Laravel, Symfony or PSR-15 adapter | [First-party proxy](#first-party-proxy-same-origin) |
+
+On this page: [Dependencies](#no-dependencies) · [Read events](#read-events) · [Verify webhooks](#verify-webhooks) · [First-party proxy](#first-party-proxy-same-origin) · [Requirements](#requirements) · [Development](#development-and-release-preparation) · [Documentation](#documentation) · [Help](#help) · [Licence](#licence)
 
 ## No dependencies
 
@@ -35,10 +84,14 @@ and there is nothing to install. CI asserts the package installs with zero
 Composer packages and that the client, the proxy and webhook verification all
 work in that state.
 
-Everything else is a `suggest`, pulled in only if you use it: `psr/http-client`
-to route API calls through your own HTTP stack, and
-`psr/http-server-middleware`, `illuminate/http` or `symfony/http-kernel` for
-whichever proxy adapter you mount.
+Everything else is a `suggest`, pulled in only if you use it:
+
+| Package | Use it to |
+| --- | --- |
+| `psr/http-client` | route API calls through your own HTTP stack |
+| `psr/http-server-middleware` | mount the proxy as PSR-15 middleware |
+| `illuminate/http` | mount the proxy as Laravel middleware |
+| `symfony/http-kernel` | mount the proxy as a Symfony kernel listener |
 
 A supplied client takes a PSR-17 `request_factory`, plus a `stream_factory`
 wherever a body is sent: the `Proxy` refuses an `http_client` without both
@@ -72,74 +125,21 @@ $proxy = new \Fingerly\Proxy([
 > supply a client, disable redirects on it: an authenticated request that
 > follows one replays your secret key to another host.
 
-## Deadlines
+## Read events
 
-`timeout` bounds the whole exchange, including receiving the body, so a server
-that answers and then stalls, or sends a byte at a time, times out like one
-that never answered. It defaults to 5 seconds, for reads and for the proxy.
-cURL's `CURLOPT_TIMEOUT_MS` covers the transfer end to end. A response body
-over 4 MiB is refused rather than buffered.
+Event reads require `fly_sk_{production|staging|development}_…` keys. Requests
+go to `https://api.fingerly.io`; the `endpoint` option overrides that for a
+local API. Public, proxy, management, malformed and unsupported keys are
+rejected before network access. Requests do not follow redirects. `get` and
+`list` each perform one request and never retry.
 
-## Connections
-
-A client or proxy keeps one cURL handle and reuses its connection, so a
-long-running worker (Octane, FrankenPHP, RoadRunner) opens one connection to
-Fingerly and keeps it. On PHP 8.5 and later the connection, DNS and TLS session
-caches are also shared across the requests a PHP-FPM worker serves, so a client
-built per request reuses them too. On PHP 8.2 to 8.4 under PHP-FPM each request
-that builds a new client opens a new connection; at a few hundred proxied
-requests a second per host, run PHP 8.5 or a worker runtime. No cookies are
-kept, and redirects are never followed.
-
-## Errors
-
-Everything thrown implements `\Fingerly\FingerlyException`, so one `catch`
-handles the lot, and the concrete classes tell them apart:
-
-| Class | When |
-| --- | --- |
-| `ConfigurationException` | An option was rejected. Nothing was sent. It is an `InvalidArgumentException`, because a key that was never valid will not become valid on a retry. |
-| `ApiException` | The API answered with a non-2xx status, a redirect included. |
-| `TimeoutException` | The request deadline elapsed. |
-| `ConnectionException` | The API could not be reached, the connection failed mid-response, or the response body was over 4 MiB. |
-
-`ApiException` carries `getStatus()`, and optional `getErrorCode()`,
-`getDetails()`, `getRequestId()` and `getRetryAfter()`, the seconds the API's
-`Retry-After` asked you to wait (null when it sent none). The secret key is
-stripped from all of them, and the response body is never echoed into a
-message. `getCode()` is the HTTP status too, so a handler that only logs the
-code still logs something useful. Reads never retry on their own; after a
-`429` (`$e->isRateLimited()`), wait `getRetryAfter()` seconds before your own
-retry.
-
-A read answers `404` with one of two codes, each with its own predicate:
-
-- `$e->isPending()`: `event_pending`, the request id was accepted and the
-  event is still being recorded. Nothing is decided yet: read again after
-  `getRetryAfter()` seconds (the API sends `Retry-After: 2`), or verify
-  asynchronously. Do not treat it as fraud.
-- `$e->isEventNotFound()`: `event_not_found`, the request id was never issued,
-  or the event is past retention.
-
-```php
-try {
-    $event = $fingerly->events->get($requestId);
-} catch (\Fingerly\ApiException $e) {
-    if ($e->isPending()) {
-        // Not decided yet: read again after $e->getRetryAfter() seconds.
-    } elseif ($e->isEventNotFound()) {
-        // Never issued, or past retention.
-    } else {
-        throw $e;
-    }
-}
-```
-
-An option this build does not know is refused rather than ignored, because a
+Construct the client once and reuse it. Every option is validated in the
+constructor, so an invalid key or endpoint throws before anything is sent. An
+option this build does not know is refused rather than ignored, because a
 silently dropped `timeout` or `endpoint` is exactly the kind of thing nobody
 notices until it matters.
 
-## Unscored events
+### Unscored events
 
 `$event->suspectScore` is `null` when the request was not scored. Never read
 null as zero: a visitor about whom nothing fired scores 0, while a submission
@@ -155,7 +155,7 @@ if (!$event->isScored()) {
 `$event->raw` and `$page->raw` keep the response body exactly as it arrived, so
 a field the API adds later is reachable without an upgrade.
 
-## Read an event you just identified
+### Read an event you just identified
 
 An event is usually readable as soon as identification answers. If it is
 still being recorded, the read throws an `ApiException` whose `isPending()` is
@@ -184,7 +184,7 @@ The archived `document` arrives moments after the event itself, so check
 `Event::$projectId` names the Fingerly project the event belongs to, as a UUID
 string. It is `null` when the server is older than projects.
 
-## Verify a backend action
+### Verify a backend action
 
 Read the event with a server-only key. Check that its tag matches your action,
 that it is recent, that its environment is correct, and that it was scored.
@@ -196,41 +196,88 @@ correlate events; they do not replace your application's authentication or
 replay protection. Never put a personal identifier (user ID, email, install ID,
 advertising ID) in a tag: the server keeps tags in long-lived rollups.
 
-## Webhooks
+### Errors
+
+Everything thrown implements `\Fingerly\FingerlyException`, so one `catch`
+handles the lot, and the concrete classes tell them apart:
+
+| Class | When |
+| --- | --- |
+| `ConfigurationException` | An option was rejected. Nothing was sent. It is an `InvalidArgumentException`, because a key that was never valid will not become valid on a retry. |
+| `ApiException` | The API answered with a non-2xx status, a redirect included. |
+| `TimeoutException` | The request deadline elapsed. |
+| `ConnectionException` | The API could not be reached, the connection failed mid-response, or the response body was over 4 MiB. |
+
+`ApiException` carries `getStatus()`, and optional `getErrorCode()`,
+`getDetails()`, `getRequestId()` and `getRetryAfter()`, the seconds the API's
+`Retry-After` asked you to wait (null when it sent none). The secret key is
+stripped from all of them, and the response body is never echoed into a
+message. `getCode()` is the HTTP status too, so a handler that only logs the
+code still logs something useful. Reads never retry on their own; after a
+`429` (`$e->isRateLimited()`), wait `getRetryAfter()` seconds before your own
+retry.
+
+A read answers `404` with one of two codes, each with its own predicate:
+
+| Predicate | Code | Meaning |
+| --- | --- | --- |
+| `$e->isPending()` | `event_pending` | The request id was accepted and the event is still being recorded. Nothing is decided yet: read again after `getRetryAfter()` seconds (the API sends `Retry-After: 2`), or verify asynchronously. Do not treat it as fraud. |
+| `$e->isEventNotFound()` | `event_not_found` | The request id was never issued, or the event is past retention. |
 
 ```php
-$valid = \Fingerly\Webhook::verify(
-    secret: getenv('FINGERLY_WEBHOOK_SECRET'),
-    payload: $request->getContent(),   // the exact bytes, before any parsing
-    timestamp: $request->header('x-fingerly-timestamp'),
-    signature: $request->header('x-fingerly-signature'),
-);
-abort_unless($valid, 400);
-
-$event = \Fingerly\Webhook::parse($request->getContent());
-ProcessFingerlyEvent::dispatch($event->id);   // deduplicate on the ID
+try {
+    $event = $fingerly->events->get($requestId);
+} catch (\Fingerly\ApiException $e) {
+    if ($e->isPending()) {
+        // Not decided yet: read again after $e->getRetryAfter() seconds.
+    } elseif ($e->isEventNotFound()) {
+        // Never issued, or past retention.
+    } else {
+        throw $e;
+    }
+}
 ```
 
-Verify the exact raw bytes before decoding them: re-serialising them changes
-the digest. Signatures cover the timestamp and body. The default replay
-tolerance is five minutes, changed with the `tolerance` argument. During a
-signing-secret rotation, any matching signature in the comma-separated header
-is accepted. Malformed or missing input is a `false` result, never an
-exception.
+### Deadlines and connections
 
-Verification proves authenticity and freshness. It does not deduplicate, so
-persist processed `WebhookEvent::$id` values as well. `Webhook::parse()`
-decodes the envelope every delivery shares and leaves `$data` an array, so a
-new event type needs no upgrade. A payload it cannot read throws
-`WebhookException`, which names the field at fault and never its value.
-`identification.completed` and `visitor.suspect` carry `$data['project_id']`;
-`identification.refused` carries it only when the refused request named a known
-key.
+`timeout` bounds the whole exchange, including receiving the body, so a server
+that answers and then stalls, or sends a byte at a time, times out like one
+that never answered. It defaults to 5 seconds, for reads and for the proxy.
+cURL's `CURLOPT_TIMEOUT_MS` covers the transfer end to end. A response body
+over 4 MiB is refused rather than buffered.
+
+A client or proxy keeps one cURL handle and reuses its connection, so a
+long-running worker (Octane, FrankenPHP, RoadRunner) opens one connection to
+Fingerly and keeps it. On PHP 8.5 and later the connection, DNS and TLS session
+caches are also shared across the requests a PHP-FPM worker serves, so a client
+built per request reuses them too. On PHP 8.2 to 8.4 under PHP-FPM each request
+that builds a new client opens a new connection; at a few hundred proxied
+requests a second per host, run PHP 8.5 or a worker runtime. No cookies are
+kept, and redirects are never followed.
+
+## Verify webhooks
+
+The call is in [Getting started](#getting-started). Verify the exact raw bytes
+before decoding them: re-serialising them changes the digest.
+
+| Behaviour | Detail |
+| --- | --- |
+| What a signature covers | the timestamp and the body |
+| Replay tolerance | five minutes by default, changed with the `tolerance` argument |
+| Secret rotation | any matching signature in the comma-separated header is accepted |
+| Malformed or missing input | a `false` result, never an exception |
+| Deduplication | verification proves authenticity and freshness only; persist processed `WebhookEvent::$id` values as well |
+| Bad payload | `Webhook::parse()` throws `WebhookException`, which names the field at fault and never its value |
+
+`Webhook::parse()` decodes the envelope every delivery shares and leaves `$data`
+an array, so a new event type needs no upgrade. `identification.completed` and
+`visitor.suspect` carry `$data['project_id']`; `identification.refused` carries
+it only when the refused request named a known key.
 
 Webhook verification touches neither the network nor ext-curl, so a receiver
 that does nothing else pulls in nothing else.
 
-## Same-origin proxy
+## First-party proxy (same-origin)
 
 Content blockers refuse browser requests to third-party APIs, and a refused
 identification is a visitor never identified. Serving the browser SDK from a
@@ -253,7 +300,18 @@ PHP has three live server request shapes, so there are three adapters over one
 core. Build the `Proxy` once per process and share it: it holds no per-request
 state, and sharing it is what lets its connection be reused.
 
-### Slim, Mezzio, anything PSR-15
+| Framework | Adapter | Install |
+| --- | --- | --- |
+| Slim, Mezzio, anything PSR-15 | `\Fingerly\Proxy\Psr15Middleware` | `psr/http-server-middleware` |
+| Laravel | `\Fingerly\Proxy\LaravelMiddleware` | `illuminate/http` |
+| Symfony | `\Fingerly\Proxy\SymfonyListener` | `symfony/http-kernel` |
+| Anything else | `$proxy->handle()` | nothing |
+
+Every adapter shares the same `Proxy` and the same `client_ip` rule below. Pick
+yours:
+
+<details>
+<summary><b>Slim, Mezzio, anything PSR-15</b></summary>
 
 ```php
 $app = \Slim\Factory\AppFactory::create();
@@ -262,7 +320,10 @@ $app = \Slim\Factory\AppFactory::create();
 $app->add(new \Fingerly\Proxy\Psr15Middleware($proxy, $app->getResponseFactory()));
 ```
 
-### Laravel
+</details>
+
+<details>
+<summary><b>Laravel</b></summary>
 
 The middleware receives the `Proxy` from the container, which cannot build it
 on its own (`client_ip` is a callable), so bind it once. Without the binding
@@ -320,7 +381,10 @@ cannot stop it being read into memory first. Cap the body size in the web
 server as well: `client_max_body_size` in nginx, `request_body { max_size }` in
 Caddy and FrankenPHP.
 
-### Symfony
+</details>
+
+<details>
+<summary><b>Symfony</b></summary>
 
 The listener runs before the router. Define the `Proxy` as a service, with an
 invokable class for `client_ip`, because a closure cannot be written in YAML.
@@ -359,15 +423,10 @@ final class ClientIp
 }
 ```
 
-Then point the browser SDK at the same path:
+</details>
 
-```ts
-const fingerly = await load({ apiKey: 'fly_pk_…', endpoints: '/k7x2qm4a' })
-```
-
-The SDK posts both of its calls to exactly that path, with nothing appended.
-
-### Any other framework
+<details>
+<summary><b>Any other framework</b></summary>
 
 The adapters are conveniences; `handle()` is the interface. Phalcon,
 CodeIgniter, CakePHP, Yii, a queue worker or a bare `index.php` all need about
@@ -393,7 +452,30 @@ the worker, not the request: build the `ProxyRequest` from the runtime's own
 request object instead, and let `client_ip` read `remoteAddress` rather than
 `$_SERVER['REMOTE_ADDR']`.
 
-### Event loops
+</details>
+
+Then point the browser SDK at the same path:
+
+```ts
+const fingerly = await load({ apiKey: 'fly_pk_…', endpoints: '/k7x2qm4a' })
+```
+
+The SDK posts both of its calls to exactly that path, with nothing appended.
+
+> **`client_ip` is the one thing you must get right.** Resolve it from a header
+> your own infrastructure sets, such as your load balancer's or CDN's, and fall
+> back on `$r->remoteAddress`, the TCP peer the adapter passes in. Only trust
+> that header when traffic can reach your server through that CDN or load
+> balancer alone; otherwise a visitor can send it themselves. Never read the
+> left-most `X-Forwarded-For` value: the visitor writes it.
+>
+> The callback must return exactly one IPv4 or IPv6 address. Anything else
+> (null, an empty string, a list, a port, padding) is a configuration error:
+> nothing is forwarded, the browser gets `500` with "The client IP callback
+> returned no valid address", and the first occurrence in the process is
+> reported through `on_error` (or `error_log()` without one).
+
+### Event loops and worker sizing
 
 The proxy and the client are synchronous: each call holds the calling thread
 for up to `timeout` while Fingerly answers. That is right for PHP-FPM, Octane,
@@ -438,56 +520,42 @@ Use the path the dashboard issued. Blockers look for words such as
 
 ### What the proxy does
 
-It forwards only `POST`; any other method gets `405`, and a path that is not the
-proxy's gets `404` first. Every request goes to one URL,
-`https://api.fingerly.io/api/v1/ingest`, which tells the identification and the
-deferred report apart by their bodies. `api_version` changes the version in
-that URL and nothing else, and `upstream` its origin. Event reads need a secret
-key and stay unreachable from a browser by construction.
+| Rule | Behaviour |
+| --- | --- |
+| Methods and paths | It forwards only `POST`; any other method gets `405`, and a path that is not the proxy's gets `404` first. |
+| Upstream | Every request goes to one URL, `https://api.fingerly.io/api/v1/ingest`, which tells the identification and the deferred report apart by their bodies. `api_version` changes the version in that URL and nothing else, and `upstream` its origin. |
+| Event reads | Need a secret key and stay unreachable from a browser by construction. |
+| Public key | The browser must present a public key from the same environment as the proxy key, or the request gets `401`. |
+| Body size | Bodies over 1 MiB get `413`. |
+| Deadline | One 5 second deadline covers the whole exchange, so an upstream that never answers, or answers a byte at a time, gets `504 Gateway timeout` rather than holding the browser's connection open. |
+| Upstream failures | An upstream that cannot be reached, drops the connection, or answers a success that is not JSON gets `502 Bad gateway`. |
+| Error answers | `504` and `502` are short `text/plain` answers marked `no-store`, and the proxy never throws, so the framework never renders its own error page in their place. |
+| Forwarded upstream | Only the content type, the visitor metadata Fingerly needs, and an `Idempotency-Key`. Customer cookies and authorization headers never are. |
+| Proxy identity | The proxy reports itself upstream as `php/0.2.0`, which the dashboard shows per proxy. |
+| Relayed back | Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining` and `Retry-After`, plus `Cache-Control: no-store` set by the proxy. It is an allowlist, so nothing on the response names Fingerly, whatever the API adds in future. |
+| Laravel and Symfony | The relayed `Cache-Control: no-store` arrives as `no-store, private`, because `ResponseHeaderBag` appends a visibility directive to any `Cache-Control` without one. That is a narrowing rather than a weakening, so it is left alone. |
 
-The browser must present a public key from the same environment as the proxy
-key, or the request gets `401`. Bodies over 1 MiB get `413`. One 5 second
-deadline covers the whole exchange, so an upstream that never answers, or
-answers a byte at a time, gets `504 Gateway timeout` rather than holding the
-browser's connection open. An upstream that cannot be reached, drops the
-connection, or answers a success that is not JSON gets `502 Bad gateway`. Both
-are short `text/plain` answers marked `no-store`, and the proxy never throws,
-so the framework never renders its own error page in their place. Pass
-`on_error` to hear about them, one line each:
+Pass `on_error` to hear about `504` and `502` answers, one line each:
 
 ```php
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),
 ```
 
-Only the content type, the visitor
-metadata Fingerly needs, and an `Idempotency-Key` are forwarded; customer
-cookies and authorization headers never are. The proxy reports itself upstream
-as `php/0.2.0`, which the dashboard shows per proxy.
+## Requirements
 
-Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining`
-and `Retry-After` are relayed back, plus `Cache-Control: no-store` set by the
-proxy. It is an allowlist, so nothing on the response names Fingerly, whatever
-the API adds in future.
-
-> **`client_ip` is the one thing you must get right.** Resolve it from a header
-> your own infrastructure sets, such as your load balancer's or CDN's, and fall
-> back on `$r->remoteAddress`, the TCP peer the adapter passes in. Only trust
-> that header when traffic can reach your server through that CDN or load
-> balancer alone; otherwise a visitor can send it themselves. Never read the
-> left-most `X-Forwarded-For` value: the visitor writes it.
->
-> The callback must return exactly one IPv4 or IPv6 address. Anything else
-> (null, an empty string, a list, a port, padding) is a configuration error:
-> nothing is forwarded, the browser gets `500` with "The client IP callback
-> returned no valid address", and the first occurrence in the process is
-> reported through `on_error` (or `error_log()` without one).
-
-Under Laravel and Symfony the relayed `Cache-Control: no-store` arrives as
-`no-store, private`, because `ResponseHeaderBag` appends a visibility
-directive to any `Cache-Control` without one. That is a narrowing rather than a
-weakening, so it is left alone.
+- PHP 8.2 or newer, and nothing outside `ext-curl` and `ext-json`.
+- Run a PHP release that has the October 2026 security fixes for CVE-2026-109618
+  and CVE-2026-109619: 8.5.12, 8.4.27, 8.3.36, 8.2.35 or later. Those flaws are
+  in PHP itself and let an unauthenticated request run code on the server, so an
+  unpatched runtime puts everything on it at risk, this SDK's secret key
+  included.
+- CI runs PHP 8.2, 8.3, 8.4 and 8.5, and tests the adapters against Laravel 10
+  to 13 and Symfony 6.4 to 8.
 
 ## Development and release preparation
+
+<details>
+<summary>Commands, tests, source structure</summary>
 
 ```sh
 composer install
@@ -506,7 +574,7 @@ repositories; to update it from the integration workspace, set
 checked by `composer test`, so there is no separate check step. Never put
 production secrets in fixtures.
 
-## Source structure
+### Source structure
 
 `Client.php` holds the client and its options. `Transport.php` performs one
 HTTP exchange over a reused cURL handle or a supplied PSR-18 client, caps the
@@ -520,3 +588,22 @@ throws for a payload it cannot read. `Proxy.php` is the same-origin core, with
 `Proxy/` holding its request and response types and the three adapters.
 `Config.php` validates every caller-supplied option: keys, origins, API
 versions, the proxy path, durations and sizes, all before any network access.
+
+</details>
+
+## Documentation
+
+- [PHP SDK guide](https://docs.fingerly.io/docs/sdks/php)
+- [Webhooks](https://docs.fingerly.io/docs/webhooks)
+- [Proxy integrations](https://docs.fingerly.io/docs/proxy-integrations)
+- [API reference](https://docs.fingerly.io/reference/overview)
+
+## Help
+
+Open an issue on [this repository](https://github.com/fingerly-io/sdk-php/issues), or write to
+[support@fingerly.io](mailto:support@fingerly.io). Report security issues to
+[security@fingerly.io](mailto:security@fingerly.io).
+
+## Licence
+
+Apache-2.0. See [LICENSE](https://github.com/fingerly-io/sdk-php/blob/main/LICENSE).
