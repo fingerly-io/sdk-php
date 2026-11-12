@@ -462,7 +462,7 @@ so the framework never renders its own error page in their place. Pass
 Only the content type, the visitor
 metadata Fingerly needs, and an `Idempotency-Key` are forwarded; customer
 cookies and authorization headers never are. The proxy reports itself upstream
-as `php/0.1.1`, which the dashboard shows per proxy.
+as `php/0.2.0`, which the dashboard shows per proxy.
 
 Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining`
 and `Retry-After` are relayed back, plus `Cache-Control: no-store` set by the
