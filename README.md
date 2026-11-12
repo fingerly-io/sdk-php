@@ -181,6 +181,9 @@ retention, and is never pending.
 The archived `document` arrives moments after the event itself, so check
 `hasDocument` rather than assuming it is there.
 
+`Event::$projectId` names the Fingerly project the event belongs to, as a UUID
+string. It is `null` when the server is older than projects.
+
 ## Verify a backend action
 
 Read the event with a server-only key. Check that its tag matches your action,
@@ -190,7 +193,8 @@ Apply your own policy to the server's verdict. A pending event
 verify asynchronously, rather than refusing the action. Do not authorize an
 action using scores or visitor identifiers supplied by the browser. Tags
 correlate events; they do not replace your application's authentication or
-replay protection.
+replay protection. Never put a personal identifier (user ID, email, install ID,
+advertising ID) in a tag: the server keeps tags in long-lived rollups.
 
 ## Webhooks
 
@@ -219,6 +223,9 @@ persist processed `WebhookEvent::$id` values as well. `Webhook::parse()`
 decodes the envelope every delivery shares and leaves `$data` an array, so a
 new event type needs no upgrade. A payload it cannot read throws
 `WebhookException`, which names the field at fault and never its value.
+`identification.completed` and `visitor.suspect` carry `$data['project_id']`;
+`identification.refused` carries it only when the refused request named a known
+key.
 
 Webhook verification touches neither the network nor ext-curl, so a receiver
 that does nothing else pulls in nothing else.
