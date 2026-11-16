@@ -221,7 +221,7 @@ final class AdaptersTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => static function (ProxyRequest $request) use (&$seen): string {
                 $seen[] = $request->remoteAddress;
 
@@ -431,7 +431,7 @@ final class AdaptersTest extends TestCase
         self::assertNotNull($this->server);
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => static fn (ProxyRequest $request): string => '203.0.113.7',
         ]);
 
@@ -506,7 +506,7 @@ final class AdaptersTest extends TestCase
         return new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => static fn (ProxyRequest $request): string => '203.0.113.7',
         ]);
     }

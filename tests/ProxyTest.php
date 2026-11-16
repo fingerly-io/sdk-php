@@ -145,7 +145,7 @@ final class ProxyTest extends TestCase
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
             'api_version' => 'v2',
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
         ]);
 
@@ -195,7 +195,7 @@ final class ProxyTest extends TestCase
         $this->server = TestServer::always(200, self::IDENTIFIED);
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
         ]);
 
@@ -297,7 +297,7 @@ final class ProxyTest extends TestCase
         $proxy = new Proxy([
             'secret_key' => TestServer::SECRET_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
         ]);
 
@@ -327,7 +327,7 @@ final class ProxyTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'max_body_bytes' => 16,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
         ]);
@@ -515,7 +515,7 @@ final class ProxyTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => 'http://127.0.0.1:1',
+            'upstream' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
             'on_error' => static function (string $line): void {
                 throw new \RuntimeException('the logger is down');
@@ -535,7 +535,7 @@ final class ProxyTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => "1.2.3.4\r\nx-injected: yes",
         ]);
 
@@ -558,7 +558,7 @@ final class ProxyTest extends TestCase
             $proxy = new Proxy([
                 'proxy_key' => TestServer::PROXY_KEY,
                 'path' => self::PATH,
-                'upstream' => $this->server->baseUrl(),
+                'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
                 'client_ip' => static fn (ProxyRequest $request): mixed => $value,
                 'on_error' => static function (string $line): void {},
             ]);
@@ -578,7 +578,7 @@ final class ProxyTest extends TestCase
             $proxy = new Proxy([
                 'proxy_key' => TestServer::PROXY_KEY,
                 'path' => self::PATH,
-                'upstream' => $this->server->baseUrl(),
+                'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
                 'client_ip' => static fn (ProxyRequest $request): string => $address,
             ]);
 
@@ -597,7 +597,7 @@ final class ProxyTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => 'http://127.0.0.1:1',
+            'upstream' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => true,
             'client_ip' => static function (ProxyRequest $request): string {
                 throw new \RuntimeException('no header');
             },
@@ -619,7 +619,7 @@ final class ProxyTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => static fn (ProxyRequest $r): string => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
         ]);
 
@@ -794,7 +794,7 @@ final class ProxyTest extends TestCase
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
             'allowed_origins' => ['https://app.example.com'],
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
         ]);
 
@@ -820,7 +820,7 @@ final class ProxyTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => $request->header('cf-connecting-ip'),
         ]);
 
@@ -871,6 +871,7 @@ final class ProxyTest extends TestCase
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
             'upstream' => $upstream,
+            'allow_insecure_loopback' => true,
             'timeout' => 0.3,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
             'on_error' => static function (string $line) use (&$lines): void {
@@ -899,7 +900,7 @@ final class ProxyTest extends TestCase
         return new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
         ]);
     }

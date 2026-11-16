@@ -37,7 +37,7 @@ final class ResponseCapTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => '/k7x2qm4a',
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => '203.0.113.7',
             'on_error' => static function (string $line) use (&$lines): void {
                 $lines[] = $line;

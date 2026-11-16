@@ -85,6 +85,32 @@ final class Config
     }
 
     /**
+     * Validates the proxy's upstream option and returns the origin it names.
+     *
+     * The proxy key travels with every forwarded request, so plain HTTP is
+     * accepted only for 127.0.0.1, localhost or [::1], and only when the
+     * caller opted in with `allow_insecure_loopback`, for a local test
+     * harness.
+     *
+     * @throws ConfigurationException
+     */
+    public static function proxyUpstream(#[\SensitiveParameter] string $value, bool $allowInsecureLoopback): string
+    {
+        $origin = self::normalizeOrigin($value);
+        $parts = parse_url($origin);
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        if ('https' !== $scheme
+            && (!$allowInsecureLoopback || !in_array($host, ['127.0.0.1', 'localhost', '[::1]'], true))) {
+            throw new ConfigurationException(
+                'upstream must use https; plain http is allowed only for 127.0.0.1, localhost or [::1] with allow_insecure_loopback',
+            );
+        }
+
+        return $origin;
+    }
+
+    /**
      * Validates an API route version before it is spliced into a URL.
      *
      * @throws ConfigurationException

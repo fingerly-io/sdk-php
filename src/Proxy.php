@@ -50,6 +50,7 @@ final class Proxy
         'allowed_origins',
         'api_version',
         'upstream',
+        'allow_insecure_loopback',
         'max_body_bytes',
         'timeout',
         'http_client',
@@ -134,7 +135,10 @@ final class Proxy
     /**
      * @param array<string, mixed> $options `proxy_key` and `client_ip` are required; `client_ip`
      *                                      is a `callable(ProxyRequest): string`. The rest are
-     *                                      `path`, `api_version`, `upstream`, `max_body_bytes`,
+     *                                      `path`, `api_version`, `upstream` (a bare HTTPS origin),
+     *                                      `allow_insecure_loopback` (true lets `upstream` be
+     *                                      plain HTTP on 127.0.0.1, localhost or [::1] for a
+     *                                      local test harness), `max_body_bytes`,
      *                                      `timeout`, `on_error` (a `callable(string): void`
      *                                      given one line per upstream failure), and a PSR-18
      *                                      `http_client` with its `request_factory` and
@@ -174,8 +178,16 @@ final class Proxy
 
         $upstream = $options['upstream'] ?? null;
         $apiVersion = $options['api_version'] ?? null;
-        $this->upstreamUrl = Config::normalizeOrigin(
-            is_string($upstream) ? $upstream : Config::DEFAULT_ENDPOINT,
+        $allowInsecureLoopback = $options['allow_insecure_loopback'] ?? false;
+        if (!is_bool($allowInsecureLoopback)) {
+            throw new ConfigurationException('allow_insecure_loopback must be a boolean');
+        }
+        if (null !== $upstream && !is_string($upstream)) {
+            throw new ConfigurationException('upstream must be a string');
+        }
+        $this->upstreamUrl = Config::proxyUpstream(
+            $upstream ?? Config::DEFAULT_ENDPOINT,
+            $allowInsecureLoopback,
         ).'/api/'.Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null).'/ingest';
         $path = $options['path'] ?? null;
         $this->path = null === $path ? null : Config::normalizePath($path);
@@ -457,10 +469,10 @@ final class Proxy
      * Builds the upstream headers.
      *
      * Nothing is copied wholesale: all incoming `x-fingerly-*`, `cookie` and
-     * `authorization` headers are stripped, only a validated
-     * `x-fingerly-sdk-platform` is restored, and `x-fingerly-origin` is sent
-     * only when incoming `origin` is non-empty (never synthesized from `host`
-     * or the request URL).
+     * `authorization` headers are stripped, `x-fingerly-origin` is sent only
+     * when incoming `origin` is non-empty (never synthesized from `host` or
+     * the request URL), and a validated `x-fingerly-sdk-platform` is restored
+     * only when there is no `origin`.
      *
      * @return array<string, string>
      */
@@ -481,10 +493,12 @@ final class Proxy
             'x-fingerly-proxy-version' => self::PROXY_VERSION,
             'user-agent' => Transport::USER_AGENT,
         ];
+        // One channel only. A request with an Origin is a browser request, as
+        // it is when sent to the API directly, so the platform header is
+        // dropped then; the API refuses a proxied request that carries both.
         if ('' !== $origin) {
             $headers['x-fingerly-origin'] = $origin;
-        }
-        if ('' !== $sdkPlatform) {
+        } elseif ('' !== $sdkPlatform) {
             $headers['x-fingerly-sdk-platform'] = $sdkPlatform;
         }
         $host = trim(self::copyable($request->header('host')));

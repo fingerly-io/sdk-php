@@ -472,6 +472,11 @@ verbatim as raw bytes to one URL, `https://api.fingerly.io/api/v1/ingest`.
 its origin. Event reads need a secret key and stay unreachable from a browser by
 construction.
 
+`upstream` must use HTTPS. Plain HTTP is accepted only for `127.0.0.1`,
+`localhost` or `[::1]`, and only with `'allow_insecure_loopback' => true`, for
+a local test harness. The proxy key travels with every forwarded request, so
+anything else is refused when the `Proxy` is constructed.
+
 The caller must present a public key from the same environment as the proxy
 key, or the request gets `401`. Requests without either `Origin` or a validated
 native `X-Fingerly-SDK-Platform` header (`ios`, `android`, `react-native`,
@@ -492,9 +497,11 @@ so the framework never renders its own error page in their place. Pass
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),
 ```
 
-All incoming `x-fingerly-*`, `cookie` and `authorization` headers are stripped,
-restoring only a validated `x-fingerly-sdk-platform` alongside
-`x-fingerly-host`, `idempotency-key`, `sec-fetch-*` and `sec-ch-ua-*`. The proxy
+All incoming `x-fingerly-*`, `cookie` and `authorization` headers are stripped.
+`x-fingerly-host`, `idempotency-key`, `sec-fetch-*` and `sec-ch-ua-*` are
+forwarded, and one channel header: `x-fingerly-origin` when the request has an
+`Origin`, otherwise the validated `x-fingerly-sdk-platform`. A request with
+both is a browser request, as it is when sent to the API directly. The proxy
 reports itself upstream as `php/0.3.0`, which the dashboard shows per proxy.
 
 Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining`
