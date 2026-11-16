@@ -98,6 +98,7 @@ handles the lot, and the concrete classes tell them apart:
 | --- | --- |
 | `ConfigurationException` | An option was rejected. Nothing was sent. It is an `InvalidArgumentException`, because a key that was never valid will not become valid on a retry. |
 | `ApiException` | The API answered with a non-2xx status, a redirect included. |
+| `EventAlreadyConsumedException` | An `ApiException` for `409 event_already_consumed`: the event was already consumed, at `getConsumedAt()`. |
 | `TimeoutException` | The request deadline elapsed. |
 | `ConnectionException` | The API could not be reached, the connection failed mid-response, or the response body was over 4 MiB. |
 
@@ -202,18 +203,41 @@ string. It is `null` when the server is older than projects.
 
 ## Verify a backend action
 
-Read the event with a server-only key. Check that its tag matches your action,
-that it is recent, that its environment is correct, and that it was scored.
-Apply your own policy to the server's verdict. A pending event
-(`isPending()`) is not a verdict: retry after `getRetryAfter()` seconds or
-verify asynchronously, rather than refusing the action. Do not authorize an
-action using scores or visitor identifiers supplied by the browser. Tags
-correlate events; they do not replace your application's authentication or
-replay protection. Never put a personal identifier (user ID, email, install ID,
-advertising ID) in a tag: the server keeps tags in long-lived rollups.
+Send the request id from the browser or app to your backend, and verify it
+there with a server-only key. Do not authorize an action using scores or
+visitor identifiers supplied by the browser.
+
+`$fingerly->events->verify()` reads the event and runs these checks in order,
+stopping at the first that fails. `$result->reason` names it, as one of the
+`\Fingerly\EventVerification::REASON_*` constants:
+
+1. `not_found`: there is no such event. `$result->event` is null only here.
+2. `too_old`: it happened more than `max_age_seconds` ago (300 by default), or
+   its time cannot be read.
+3. `tag_mismatch`: you passed `tag` and the event's tag is not exactly it. An
+   untagged event never matches.
+4. `unidentifiable`: the event's `visitorId` is `''`.
+5. `unscored`: the event has no suspect score.
+6. `already_consumed`: another call already consumed the event.
+
+When every other check passes, `verify` consumes the event last, so one event
+backs one decision: a replayed request id answers `already_consumed`. Pass
+`'consume' => false` to check without consuming. Then `$result->ok` is true
+and `$result->reason` is `''`.
+
+`verify` never judges the score, the level or the triggers. Your policy
+decides what they mean for the action, after `ok`:
 
 ```php
-if ('' === $event->visitorId || !$event->isScored()) {
+$result = $fingerly->events->verify($requestId, [
+    'tag' => 'checkout',
+    'max_age_seconds' => 300,
+]);
+if (!$result->ok) {
+    return 'refuse'; // $result->reason says why
+}
+$event = $result->event;
+if ('high' === $event->suspectLevel) {
     return 'review';
 }
 foreach ($event->triggers as $trigger) {
@@ -222,6 +246,24 @@ foreach ($event->triggers as $trigger) {
     }
 }
 ```
+
+A pending event (`isPending()`) is not a verdict, so `verify` throws it as an
+`ApiException`, along with every other error: retry after `getRetryAfter()`
+seconds or verify asynchronously, rather than refusing the action. An unknown
+option, a `max_age_seconds` that is not a positive integer, an empty `tag` or a
+`consume` that is not a boolean throws `ConfigurationException` before anything
+is sent.
+
+`$fingerly->events->consume($requestId)` consumes an event on its own. The
+first call returns an `EventConsumption` whose `first` is true; any later call
+throws `\Fingerly\EventAlreadyConsumedException`, an `ApiException`
+(`409 event_already_consumed`, `isAlreadyConsumed()`) whose `getConsumedAt()`
+says when. It is never retried.
+
+Tags correlate events; they do not replace your application's authentication
+or replay protection.
+Never put a personal identifier (user ID, email, install ID, advertising ID) in
+a tag: the server keeps tags in long-lived rollups.
 
 ## Apple DeviceCheck bits
 
@@ -606,7 +648,9 @@ production secrets in fixtures.
 `Client.php` holds the client and its options. `Transport.php` performs one
 HTTP exchange over a reused cURL handle or a supplied PSR-18 client, caps the
 response body, and maps failures to `ApiException`. `Secret.php` holds a key
-so that no dump or serialisation can show it. `Events.php` owns the event reads and the list filters, and `DeviceCheck.php`
+so that no dump or serialisation can show it. `Events.php` owns the event reads, the list filters, verification and
+consumption, decoding into `EventVerification.php` and `EventConsumption.php`
+and throwing `EventAlreadyConsumedException.php`, and `DeviceCheck.php`
 the DeviceCheck reads and writes, decoding into `DeviceCheckBits.php` and
 `DeviceCheckWrite.php`;
 `Event.php`, `EventPage.php`, `EventTrigger.php` and

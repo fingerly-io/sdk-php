@@ -23,6 +23,11 @@
   the Apple DeviceCheck bits of an iOS event, retrying only a `503` or a
   transport failure with the identical request. `ApiException` gains a
   predicate per DeviceCheck error code and `getAppleStatus()`.
+- Added `$fingerly->events->verify($requestId, $options)`, which reads an event
+  and checks it exists, is recent (`max_age_seconds`, 300 by default), carries
+  the expected `tag`, is identifiable and scored, then consumes it once, and
+  `$fingerly->events->consume($requestId)` with a typed
+  `EventAlreadyConsumedException` for `event_already_consumed`.
 
 ## 0.2.0
 

@@ -21,8 +21,11 @@ namespace Fingerly;
  *     }
  * }
  * ```
+ *
+ * {@see EventAlreadyConsumedException} extends it for an event that was
+ * already consumed.
  */
-final class ApiException extends \RuntimeException implements FingerlyException
+class ApiException extends \RuntimeException implements FingerlyException
 {
     /**
      * @param int         $status     the HTTP status code
@@ -119,6 +122,16 @@ final class ApiException extends \RuntimeException implements FingerlyException
     public function isPending(): bool
     {
         return 404 === $this->status && 'event_pending' === $this->errorCode;
+    }
+
+    /**
+     * True when the event was already consumed (`409 event_already_consumed`):
+     * another call already used it to back a decision. Such an error is an
+     * {@see EventAlreadyConsumedException}, which says when.
+     */
+    public function isAlreadyConsumed(): bool
+    {
+        return 409 === $this->status && 'event_already_consumed' === $this->errorCode;
     }
 
     /**
