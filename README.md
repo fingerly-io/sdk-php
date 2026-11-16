@@ -475,10 +475,12 @@ accepted request goes verbatim as raw bytes to one URL,
 that URL and nothing else, and `upstream` its origin. Event reads need a secret
 key and stay unreachable from a browser by construction.
 
-`upstream` must use HTTPS. Plain HTTP is accepted only for `127.0.0.1`,
-`localhost` or `[::1]`, and only with `'allow_insecure_loopback' => true`, for
-a local test harness. The proxy key travels with every forwarded request, so
-anything else is refused when the `Proxy` is constructed.
+`upstream` must be a bare HTTPS origin, `https://host` or `https://host:port`,
+with no credentials, path, query, fragment, space or control character. Plain
+HTTP is accepted only for `127.0.0.1`, `localhost` or `[::1]`, and only with
+`'allow_insecure_loopback' => true`, for a local test harness. The proxy key
+travels with every forwarded request, so anything else is refused when the
+`Proxy` is constructed.
 
 The caller must present a public key from the same environment as the proxy
 key, or the request gets `401`. Requests without either `Origin` or a validated
@@ -495,7 +497,9 @@ connection, answers a redirect or a status outside 200 to 599, or answers a
 success that is not JSON gets `502 Bad gateway`; a redirect is never followed
 and its `Location` never relayed. Both are short `text/plain` answers marked
 `no-store`, and the proxy never throws, so the framework never renders its own
-error page in their place. Pass `on_error` to hear about them, one line each:
+error page in their place. Pass `on_error` to hear about them, one line each.
+A line names the kind of failure (`connect`, `dns`, `tls`, ...), never the
+upstream host, the URL or a key:
 
 ```php
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),

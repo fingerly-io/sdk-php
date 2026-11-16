@@ -147,6 +147,72 @@ final class ProxyHardeningTest extends TestCase
         $this->construct(['upstream' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => 'yes']);
     }
 
+    public function testTheUpstreamOptionRefusesAPathOrStrayBytes(): void
+    {
+        $accepted = [];
+        foreach ([
+            'https://upstream.invalid/prefix',
+            'https://upstream.invalid/a/../b',
+            'https://upstream.invalid//',
+            "https://upstream.invalid\n",
+            'https://upstream.invalid ',
+            ' https://upstream.invalid',
+            "https://upstream.invalid\r\nx-injected: 1",
+            "https://upstream.invalid\t",
+            "https://upstream.invalid\x00",
+            'https://upstream.invalid:99999',
+            'https://upstream.invalid:0',
+            'https://upstream.invalid\@other.invalid',
+            'ftp://upstream.invalid',
+            'https://user@upstream.invalid',
+            'https://user:pass@upstream.invalid',
+            'https://upstream.invalid?x=1',
+            'https://upstream.invalid?',
+            'https://upstream.invalid#x',
+            'https://upstream.invalid#',
+            '//upstream.invalid',
+            'upstream.invalid',
+            'https://',
+            'https://up_stream.invalid',
+            '',
+        ] as $upstream) {
+            try {
+                $this->construct(['upstream' => $upstream]);
+                $accepted[] = json_encode($upstream);
+            } catch (ConfigurationException) {
+            }
+        }
+        self::assertSame([], $accepted, 'accepted as upstream: '.implode(' ', $accepted));
+    }
+
+    public function testTheForwardedTargetIsRebuiltFromTheParsedOrigin(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => strtoupper('http').substr($this->server->baseUrl(), 4).'/',
+            'allow_insecure_loopback' => true,
+            'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
+        ]);
+
+        self::assertSame(200, $proxy->handle($this->identify())->status);
+        self::assertSame('/api/v1/ingest', $this->server->first()['path']);
+    }
+
+    public function testApiVersionCannotCarryAPath(): void
+    {
+        $accepted = [];
+        foreach (['v1/../../x', '../v1', 'v1/', "v1\n", 'v1?x', 'V1', 'v0', 'v1 ', 'v1%2f..', ''] as $version) {
+            try {
+                $this->construct(['api_version' => $version]);
+                $accepted[] = json_encode($version);
+            } catch (ConfigurationException) {
+            }
+        }
+        self::assertSame([], $accepted, 'accepted as api_version: '.implode(' ', $accepted));
+    }
+
     // Path and method.
 
     public function testOnlyAnExactPostIsForwarded(): void
@@ -320,6 +386,53 @@ final class ProxyHardeningTest extends TestCase
             self::assertSame('no-store', $response->headers['cache-control'] ?? null, "upstream status {$status}");
             $this->stopRawServer();
         }
+    }
+
+    public function testAnUnreachableUpstreamIsNotNamedInTheAnswerOrTheLogLine(): void
+    {
+        $lines = [];
+        // A loopback port nothing listens on.
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => 'http://127.0.0.1:1',
+            'allow_insecure_loopback' => true,
+            'timeout' => 1.0,
+            'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
+            'on_error' => static function (string $line) use (&$lines): void {
+                $lines[] = $line;
+            },
+        ]);
+        $response = $proxy->handle($this->identify());
+
+        self::assertSame(502, $response->status);
+        self::assertSame('no-store', $response->headers['cache-control'] ?? null);
+        self::assertStringNotContainsString('127.0.0.1', $response->body.json_encode($response->headers));
+        self::assertSame(['fingerly proxy: upstream request failed: connect'], $lines);
+    }
+
+    public function testAFailingSuppliedClientIsNotNamedInTheLogLine(): void
+    {
+        $lines = [];
+        $client = new CannedPsr18Client(new \RuntimeException('failed sending '.TestServer::PROXY_KEY.' to https://upstream.invalid/api/v1/ingest'));
+        $factory = new Psr17Factory();
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => 'https://upstream.invalid',
+            'http_client' => $client,
+            'request_factory' => $factory,
+            'stream_factory' => $factory,
+            'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
+            'on_error' => static function (string $line) use (&$lines): void {
+                $lines[] = $line;
+            },
+        ]);
+        $response = $proxy->handle($this->identify());
+
+        self::assertSame(502, $response->status);
+        self::assertSame('Bad gateway', $response->body);
+        self::assertSame(['fingerly proxy: upstream request failed: client'], $lines);
     }
 
     // Keys in construction errors.

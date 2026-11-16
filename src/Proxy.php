@@ -336,7 +336,11 @@ final class Proxy
 
             return self::refuse(504, 'Gateway timeout', $cors);
         } catch (ConnectionException $e) {
-            $this->report('upstream request failed: '.preg_replace('/\Afingerly: (request failed: )?/', '', $e->getMessage()));
+            // The kind of failure only: the underlying message names the
+            // upstream host, port and URL, which do not belong in a log line.
+            $this->report('upstream request failed: '.(
+                'too_large' === $e->kind ? sprintf('the response body is over %d MiB', Transport::MAX_RESPONSE_BODY >> 20) : $e->kind
+            ));
 
             return self::refuse(502, 'Bad gateway', $cors);
         }

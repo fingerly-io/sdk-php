@@ -87,27 +87,50 @@ final class Config
     /**
      * Validates the proxy's upstream option and returns the origin it names.
      *
-     * The proxy key travels with every forwarded request, so plain HTTP is
+     * The proxy key travels with every forwarded request, so the upstream is
+     * held to a bare origin: `https://host` or `https://host:port`, printable
+     * ASCII only, with no credentials, path, query or fragment. Plain HTTP is
      * accepted only for 127.0.0.1, localhost or [::1], and only when the
      * caller opted in with `allow_insecure_loopback`, for a local test
-     * harness.
+     * harness. The result is rebuilt from the parsed parts rather than the
+     * input. No error names the value, which may have been pasted with a
+     * secret in it.
      *
      * @throws ConfigurationException
      */
     public static function proxyUpstream(#[\SensitiveParameter] string $value, bool $allowInsecureLoopback): string
     {
-        $origin = self::normalizeOrigin($value);
-        $parts = parse_url($origin);
-        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
-        $host = strtolower((string) ($parts['host'] ?? ''));
-        if ('https' !== $scheme
-            && (!$allowInsecureLoopback || !in_array($host, ['127.0.0.1', 'localhost', '[::1]'], true))) {
-            throw new ConfigurationException(
-                'upstream must use https; plain http is allowed only for 127.0.0.1, localhost or [::1] with allow_insecure_loopback',
-            );
+        $invalid = 'upstream must be a bare origin such as https://api.fingerly.io, with no credentials, path, query or fragment';
+        if (1 !== preg_match('/\A[\x21-\x7e]+\z/', $value) || 1 === preg_match('/[?#@\\\]/', $value)) {
+            throw new ConfigurationException($invalid);
+        }
+        $parts = parse_url($value);
+        if (false === $parts
+            || !isset($parts['scheme'], $parts['host'])
+            || isset($parts['user']) || isset($parts['pass'])
+            || isset($parts['query']) || isset($parts['fragment'])
+            || !in_array($parts['path'] ?? '', ['', '/'], true)
+            || (isset($parts['port']) && ($parts['port'] < 1 || $parts['port'] > 65535))
+        ) {
+            throw new ConfigurationException($invalid);
+        }
+        $scheme = strtolower($parts['scheme']);
+        $host = strtolower($parts['host']);
+        if (1 !== preg_match('/\A(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])\z/', $host)) {
+            throw new ConfigurationException($invalid);
+        }
+        if ('https' !== $scheme) {
+            if ('http' !== $scheme) {
+                throw new ConfigurationException($invalid);
+            }
+            if (!$allowInsecureLoopback || !in_array($host, ['127.0.0.1', 'localhost', '[::1]'], true)) {
+                throw new ConfigurationException(
+                    'upstream must use https; plain http is allowed only for 127.0.0.1, localhost or [::1] with allow_insecure_loopback',
+                );
+            }
         }
 
-        return $origin;
+        return $scheme.'://'.$host.(isset($parts['port']) ? ':'.$parts['port'] : '');
     }
 
     /**
