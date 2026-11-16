@@ -261,8 +261,11 @@ final class Proxy
         // A body on a HEAD answer would be read as the start of the next
         // response on a kept-alive connection, and some servers (Swoole among
         // them) write whatever they are handed.
-        $method = strtoupper($request->method);
-        $head = 'HEAD' === $method;
+        // The method is matched exactly, as the contract and HTTP spell it:
+        // `post` is not `POST`. The HEAD test is the one place case is
+        // ignored, because it only decides whether to leave the body out.
+        $method = $request->method;
+        $head = 0 === strcasecmp($method, 'HEAD');
         if (!$this->handles($request)) {
             return self::refuse(404, $head ? '' : 'Not Found');
         }

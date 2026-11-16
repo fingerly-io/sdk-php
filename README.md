@@ -467,13 +467,13 @@ Use the path the dashboard issued. Blockers look for words such as
 
 ### What the proxy does
 
-It forwards only `POST` (plus `OPTIONS` when `allowed_origins` is configured);
-any other method gets `405`, and a path that is not the proxy's (including
-retired `/supplement` subpaths) gets `404` first. Every accepted request goes
-verbatim as raw bytes to one URL, `https://api.fingerly.io/api/v1/ingest`.
-`api_version` changes the version in that URL and nothing else, and `upstream`
-its origin. Event reads need a secret key and stay unreachable from a browser by
-construction.
+It forwards only `POST` (plus `OPTIONS` when `allowed_origins` is configured),
+matched exactly: any other method, `post` included, gets `405`, and a path that
+is not the proxy's (including `/supplement` subpaths) gets `404` first. Every
+accepted request goes verbatim as raw bytes to one URL,
+`https://api.fingerly.io/api/v1/ingest`. `api_version` changes the version in
+that URL and nothing else, and `upstream` its origin. Event reads need a secret
+key and stay unreachable from a browser by construction.
 
 `upstream` must use HTTPS. Plain HTTP is accepted only for `127.0.0.1`,
 `localhost` or `[::1]`, and only with `'allow_insecure_loopback' => true`, for

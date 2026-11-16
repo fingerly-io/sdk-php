@@ -40,6 +40,24 @@ final class ProxyHardeningTest extends TestCase
     private const IDENTIFIED = '{"request_id":"req_1","visitor_id":"vis_1"}';
     private const ORIGIN = 'https://shop.example.com';
 
+    /** Raw request targets that are not the proxy's path. */
+    private const NOT_THE_PATH = [
+        '/k7x2qm4a/',
+        '//k7x2qm4a',
+        '/k7x2qm4a/.',
+        '/./k7x2qm4a',
+        '/x/../k7x2qm4a',
+        '/k7x2qm4a/..',
+        '/%6b7x2qm4a',
+        '/k7x2qm4a%2f',
+        '/k7x2qm4a%00',
+        '/k7x2qm4a%20',
+        '/k7x2qm4a;a=b',
+        '/K7X2QM4A',
+        '/k7x2qm4a/ingest',
+        '/index.php/k7x2qm4a',
+    ];
+
     private ?TestServer $server = null;
 
     /** @var null|resource */
@@ -127,6 +145,116 @@ final class ProxyHardeningTest extends TestCase
     {
         $this->expectException(ConfigurationException::class);
         $this->construct(['upstream' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => 'yes']);
+    }
+
+    // Path and method.
+
+    public function testOnlyAnExactPostIsForwarded(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $forwarded = [];
+        foreach (['post', 'Post', 'pOST', 'GET', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'options', 'HEAD', 'head', 'TRACE', 'CONNECT', 'POST ', ''] as $method) {
+            $response = $this->proxy()->handle(new ProxyRequest(
+                method: $method,
+                path: self::PATH,
+                headers: ['x-api-key' => TestServer::PUBLIC_KEY, 'origin' => self::ORIGIN],
+                body: '{}',
+            ));
+            if (405 !== $response->status || 'POST' !== ($response->headers['allow'] ?? null)
+                || 'no-store' !== ($response->headers['cache-control'] ?? null)) {
+                $forwarded[] = json_encode($method).'=>'.$response->status;
+            }
+        }
+        self::assertSame([], $forwarded, implode(' ', $forwarded));
+        self::assertSame(0, $this->server->requestCount());
+    }
+
+    public function testWithCorsOnlyAnExactOptionsIsAPreflight(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => $this->server->baseUrl(),
+            'allow_insecure_loopback' => true,
+            'allowed_origins' => [self::ORIGIN],
+            'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
+        ]);
+
+        self::assertSame(204, $proxy->handle(new ProxyRequest('OPTIONS', self::PATH, ['origin' => self::ORIGIN]))->status);
+        foreach (['options', 'Options', 'post'] as $method) {
+            $response = $proxy->handle(new ProxyRequest($method, self::PATH, ['origin' => self::ORIGIN, 'x-api-key' => TestServer::PUBLIC_KEY], '{}'));
+            self::assertSame(405, $response->status, $method);
+            self::assertSame('POST, OPTIONS', $response->headers['allow'] ?? null, $method);
+            self::assertSame('no-store', $response->headers['cache-control'] ?? null, $method);
+        }
+        self::assertSame(0, $this->server->requestCount());
+    }
+
+    public function testEveryAdapterRefusesALowercaseMethod(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        foreach (['psr15', 'laravel', 'symfony'] as $adapter) {
+            foreach (['post', 'Post'] as $method) {
+                [$status, $cache, $reachedApp] = $this->throughAdapter($adapter, self::PATH, ['REQUEST_METHOD' => $method]);
+                self::assertSame(405, $status, "{$adapter} {$method}");
+                self::assertFalse($reachedApp, "{$adapter} {$method}");
+                self::assertStringContainsString('no-store', $cache, "{$adapter} {$method}");
+            }
+        }
+        self::assertSame(0, $this->server->requestCount());
+    }
+
+    public function testTheCoreAnswers404ForEveryOtherSpellingOfThePath(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        foreach ([...self::NOT_THE_PATH, self::PATH.'?x=1', self::PATH."\n", self::PATH.' ', ''] as $path) {
+            $response = $this->proxy()->handle($this->identify([], $path));
+            self::assertSame(404, $response->status, (string) json_encode($path));
+            self::assertSame('no-store', $response->headers['cache-control'] ?? null);
+        }
+        self::assertSame(0, $this->server->requestCount());
+    }
+
+    public function testEveryAdapterMatchesOnlyTheRawPath(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $answered = [];
+        foreach (['psr15', 'laravel', 'symfony'] as $adapter) {
+            foreach (self::NOT_THE_PATH as $path) {
+                [$status, , $reachedApp] = $this->throughAdapter($adapter, $path);
+                if (!$reachedApp) {
+                    $answered[] = $adapter.' '.$path.'=>'.$status;
+                }
+            }
+        }
+        self::assertSame(0, $this->server->requestCount(), implode(' ', $answered));
+        self::assertSame([], $answered, implode(' ', $answered));
+    }
+
+    /**
+     * Laravel and Symfony append `private` to a `Cache-Control` without a
+     * visibility directive, so there it arrives as `no-store, private`.
+     */
+    public function testEveryLocalAnswerThroughEveryAdapterIsNoStore(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        foreach (['psr15', 'laravel', 'symfony'] as $adapter) {
+            $cases = [
+                'GET' => $this->throughAdapter($adapter, self::PATH, ['REQUEST_METHOD' => 'GET']),
+                'HEAD' => $this->throughAdapter($adapter, self::PATH, ['REQUEST_METHOD' => 'HEAD']),
+                'OPTIONS' => $this->throughAdapter($adapter, self::PATH, ['REQUEST_METHOD' => 'OPTIONS']),
+                'post' => $this->throughAdapter($adapter, self::PATH, ['REQUEST_METHOD' => 'post']),
+                '401' => $this->throughAdapter($adapter, self::PATH, ['HTTP_X_API_KEY' => 'nope'], ['x-api-key' => 'nope']),
+                '400' => $this->throughAdapter($adapter, self::PATH, ['HTTP_ORIGIN' => ''], ['origin' => '']),
+            ];
+            foreach ($cases as $label => [$status, $cache, $reachedApp]) {
+                self::assertFalse($reachedApp, "{$adapter} {$label}");
+                self::assertGreaterThanOrEqual(400, $status, "{$adapter} {$label}");
+                self::assertStringContainsString('no-store', $cache, "{$adapter} {$label} status {$status}");
+            }
+        }
+        self::assertSame(0, $this->server->requestCount());
     }
 
     // Upstream answers.
