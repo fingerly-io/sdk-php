@@ -491,11 +491,11 @@ URL. Bodies over 1 MiB get `413`. One 5 second
 deadline covers the whole exchange, so an upstream that never answers, or
 answers a byte at a time, gets `504 Gateway timeout` rather than holding the
 browser's connection open. An upstream that cannot be reached, drops the
-connection, answers a redirect, or answers a success that is not JSON gets
-`502 Bad gateway`; a redirect is never followed and its `Location` never
-relayed. Both are short `text/plain` answers marked `no-store`, and the proxy
-never throws, so the framework never renders its own error page in their
-place. Pass `on_error` to hear about them, one line each:
+connection, answers a redirect or a status outside 200 to 599, or answers a
+success that is not JSON gets `502 Bad gateway`; a redirect is never followed
+and its `Location` never relayed. Both are short `text/plain` answers marked
+`no-store`, and the proxy never throws, so the framework never renders its own
+error page in their place. Pass `on_error` to hear about them, one line each:
 
 ```php
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),

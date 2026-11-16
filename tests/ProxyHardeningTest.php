@@ -42,10 +42,14 @@ final class ProxyHardeningTest extends TestCase
 
     private ?TestServer $server = null;
 
+    /** @var null|resource */
+    private $rawServer;
+
     protected function tearDown(): void
     {
         $this->server?->stop();
         $this->server = null;
+        $this->stopRawServer();
     }
 
     // Channel headers.
@@ -169,6 +173,27 @@ final class ProxyHardeningTest extends TestCase
         self::assertSame('no-store', $response->headers['cache-control'] ?? null);
     }
 
+    public function testAnUpstreamStatusOutsideTheRangeIsA502(): void
+    {
+        foreach (['099', '600', '700', '999'] as $status) {
+            $url = $this->startRawServer('HTTP/1.1 '.$status." Odd\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+            $proxy = new Proxy([
+                'proxy_key' => TestServer::PROXY_KEY,
+                'path' => self::PATH,
+                'upstream' => $url,
+                'allow_insecure_loopback' => true,
+                'timeout' => 2.0,
+                'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
+                'on_error' => static function (string $line): void {},
+            ]);
+            $response = $proxy->handle($this->identify());
+
+            self::assertSame(502, $response->status, "upstream status {$status}");
+            self::assertSame('no-store', $response->headers['cache-control'] ?? null, "upstream status {$status}");
+            $this->stopRawServer();
+        }
+    }
+
     // Keys in construction errors.
 
     public function testAConstructionErrorCarriesNoKeyInItsTrace(): void
@@ -214,6 +239,15 @@ final class ProxyHardeningTest extends TestCase
         }
     }
 
+    private function stopRawServer(): void
+    {
+        if (is_resource($this->rawServer)) {
+            proc_terminate($this->rawServer, \SIGTERM);
+            proc_close($this->rawServer);
+        }
+        $this->rawServer = null;
+    }
+
     /**
      * Where a key shows up in an exception: its message, its string form, or
      * any frame's arguments as an error reporter would read them.
@@ -237,6 +271,51 @@ final class ProxyHardeningTest extends TestCase
     }
 
     // Helpers.
+
+    /**
+     * Starts a one-shot raw socket server on 127.0.0.1 that answers each
+     * connection with the bytes given, for status lines no framework emits.
+     */
+    private function startRawServer(string $answer): string
+    {
+        $socket = stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
+        self::assertIsResource($socket);
+        $port = (int) explode(':', (string) stream_socket_get_name($socket, false))[1];
+        fclose($socket);
+
+        $code = <<<'PHP'
+            $server = stream_socket_server('tcp://127.0.0.1:'.$argv[1], $errno, $error);
+            $answer = base64_decode($argv[2]);
+            while ($client = @stream_socket_accept($server, 30)) {
+                $request = '';
+                while (!str_contains($request, "\r\n\r\n") && false !== ($chunk = fread($client, 8192)) && '' !== $chunk) {
+                    $request .= $chunk;
+                }
+                if (preg_match('/content-length:\s*(\d+)/i', $request, $m)) {
+                    $body = substr($request, strpos($request, "\r\n\r\n") + 4);
+                    while (strlen($body) < (int) $m[1] && false !== ($chunk = fread($client, 8192)) && '' !== $chunk) {
+                        $body .= $chunk;
+                    }
+                }
+                fwrite($client, $answer);
+                fclose($client);
+            }
+            PHP;
+        $process = proc_open([\PHP_BINARY, '-r', $code, (string) $port, base64_encode($answer)], [], $pipes);
+        self::assertIsResource($process);
+        $this->rawServer = $process;
+
+        for ($attempt = 0; $attempt < 200; ++$attempt) {
+            $probe = @fsockopen('127.0.0.1', $port, $errno, $error, 0.1);
+            if (is_resource($probe)) {
+                fclose($probe);
+
+                return 'http://127.0.0.1:'.$port;
+            }
+            usleep(25_000);
+        }
+        self::fail('the raw server never started listening');
+    }
 
     /**
      * @param array<string, mixed> $options
