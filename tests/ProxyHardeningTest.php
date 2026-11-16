@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fingerly\Tests;
 
+use Fingerly\Client;
 use Fingerly\ConfigurationException;
 use Fingerly\Proxy;
 use Fingerly\Proxy\LaravelMiddleware;
@@ -166,6 +167,73 @@ final class ProxyHardeningTest extends TestCase
         self::assertArrayNotHasKey('location', $response->headers);
         self::assertArrayNotHasKey('set-cookie', $response->headers);
         self::assertSame('no-store', $response->headers['cache-control'] ?? null);
+    }
+
+    // Keys in construction errors.
+
+    public function testAConstructionErrorCarriesNoKeyInItsTrace(): void
+    {
+        $previous = ini_set('zend.exception_ignore_args', '0');
+
+        try {
+            $leaks = [];
+            foreach ([
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'pathh' => '/x'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'fly_px_production_SECRETMARK' => 1],
+                ['proxy_key' => 'fly_px_production_SECRETMARK with space'],
+                ['proxy_key' => 'fly_sk_production_SECRETMARK'],
+                ['proxy_key' => "fly_px_production_SECRETMARK\n"],
+                ['secret_key' => 'fly_px_production_SECRETMARK'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'secret_key' => 'fly_sk_production_SECRETMARK'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'upstream' => 'nope'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'upstream' => 'http://upstream.invalid'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'client_ip' => 'nope'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'max_body_bytes' => 0],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'path' => 'nope'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'allowed_origins' => 'nope'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'http_client' => new \stdClass()],
+            ] as $i => $options) {
+                try {
+                    new Proxy($options + ['client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP]);
+                    self::fail("case {$i} should have been refused");
+                } catch (ConfigurationException $e) {
+                    $leaks = [...$leaks, ...self::leaks($e, "proxy case {$i}")];
+                }
+            }
+            foreach ([['endpointt' => 'x'], ['endpoint' => 'ftp://x']] as $i => $options) {
+                try {
+                    new Client('fly_sk_production_SECRETMARK', $options);
+                    self::fail("client case {$i} should have been refused");
+                } catch (ConfigurationException $e) {
+                    $leaks = [...$leaks, ...self::leaks($e, "client case {$i}")];
+                }
+            }
+            self::assertSame([], $leaks, implode("\n", $leaks));
+        } finally {
+            ini_set('zend.exception_ignore_args', false === $previous ? '1' : $previous);
+        }
+    }
+
+    /**
+     * Where a key shows up in an exception: its message, its string form, or
+     * any frame's arguments as an error reporter would read them.
+     *
+     * @return list<string>
+     */
+    private static function leaks(ConfigurationException $e, string $label): array
+    {
+        $leaks = [];
+        if (str_contains($e->getMessage().(string) $e.$e->getTraceAsString(), 'SECRETMARK')) {
+            $leaks[] = "{$label}: message or string trace";
+        }
+        foreach ($e->getTrace() as $frame) {
+            $args = $frame['args'] ?? [];
+            if (str_contains(print_r($args, true).var_export($args, true), 'SECRETMARK')) {
+                $leaks[] = sprintf('%s: args of %s::%s', $label, $frame['class'] ?? '', $frame['function']);
+            }
+        }
+
+        return $leaks;
     }
 
     // Helpers.

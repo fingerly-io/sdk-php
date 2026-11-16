@@ -69,7 +69,7 @@ final class Events
      */
     public function list(array $query = []): EventPage
     {
-        Config::rejectUnknown($query, self::LIST_OPTIONS);
+        Config::rejectUnknownKeys(array_keys($query), self::LIST_OPTIONS);
 
         $params = [];
         if (isset($query['from'])) {

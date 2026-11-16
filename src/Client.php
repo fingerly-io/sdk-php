@@ -43,9 +43,9 @@ final class Client
      *
      * @throws ConfigurationException if any option is invalid; nothing is sent until then
      */
-    public function __construct(#[\SensitiveParameter] string $secretKey, array $options = [])
+    public function __construct(#[\SensitiveParameter] string $secretKey, #[\SensitiveParameter] array $options = [])
     {
-        Config::rejectUnknown($options, self::OPTIONS);
+        Config::rejectUnknownKeys(array_keys($options), self::OPTIONS);
 
         // Validate the key even when an endpoint is given, so a public, proxy
         // or management key can never reach an API that would accept it.

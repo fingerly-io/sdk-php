@@ -153,7 +153,9 @@ final class Proxy
      */
     public function __construct(#[\SensitiveParameter] array $options)
     {
-        Config::rejectUnknown($options, self::OPTIONS);
+        // Names only: an exception thrown from a helper that was handed the
+        // whole array would carry the key in its trace arguments.
+        Config::rejectUnknownKeys(array_keys($options), self::OPTIONS);
 
         $proxyKey = $options['proxy_key'] ?? null;
         $secretKey = $options['secret_key'] ?? null;

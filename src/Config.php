@@ -183,14 +183,24 @@ final class Config
      * A misspelled option is otherwise silent, and a silently ignored timeout
      * or endpoint is exactly the kind of thing nobody notices until it matters.
      *
-     * @param array<string, mixed> $options
-     * @param list<string>         $known
+     * It takes the option names only, never the options: the array holds a
+     * key, and an exception thrown here would carry this frame's arguments
+     * in its trace.
+     *
+     * @param list<int|string> $names
+     * @param list<string>     $known
      *
      * @throws ConfigurationException
      */
-    public static function rejectUnknown(array $options, array $known): void
+    public static function rejectUnknownKeys(#[\SensitiveParameter] array $names, array $known): void
     {
-        $unknown = array_diff(array_keys($options), $known);
+        $unknown = array_map(
+            // A name is echoed only when it looks like an option name, and
+            // never when it looks like a key that ended up in the wrong place.
+            static fn (int|string $name): string => 1 === preg_match('/\A[A-Za-z0-9_]{1,64}\z/', (string) $name)
+                && !str_starts_with((string) $name, 'fly_') ? (string) $name : '(invalid name)',
+            array_values(array_diff($names, $known)),
+        );
         if ([] !== $unknown) {
             sort($unknown);
 
