@@ -53,9 +53,6 @@ final class Proxy
         'allow_insecure_loopback',
         'max_body_bytes',
         'timeout',
-        'http_client',
-        'request_factory',
-        'stream_factory',
         'on_error',
     ];
 
@@ -140,9 +137,7 @@ final class Proxy
      *                                      plain HTTP on 127.0.0.1, localhost or [::1] for a
      *                                      local test harness), `max_body_bytes`,
      *                                      `timeout`, `on_error` (a `callable(string): void`
-     *                                      given one line per upstream failure), and a PSR-18
-     *                                      `http_client` with its `request_factory` and
-     *                                      `stream_factory`. It is
+     *                                      given one line per upstream failure). It is
      *                                      deliberately not a shape: these come from environment
      *                                      variables and config files, where every value is
      *                                      `mixed`, and validating them here is the point. An
@@ -208,17 +203,10 @@ final class Proxy
         }
         $this->onError = $onError;
 
-        if (null !== ($options['http_client'] ?? null)
-            && (null === ($options['request_factory'] ?? null) || null === ($options['stream_factory'] ?? null))) {
-            throw new ConfigurationException('request_factory and stream_factory are required alongside http_client');
-        }
-        $this->transport = new Transport(
-            timeout: $timeout,
-            redactKey: $this->key,
-            httpClient: is_object($options['http_client'] ?? null) ? $options['http_client'] : null,
-            requestFactory: is_object($options['request_factory'] ?? null) ? $options['request_factory'] : null,
-            streamFactory: is_object($options['stream_factory'] ?? null) ? $options['stream_factory'] : null,
-        );
+        // Always the bundled ext-curl transport, which never follows a
+        // redirect. A supplied HTTP client could, and would replay the proxy
+        // key to wherever the redirect pointed before any answer came back.
+        $this->transport = new Transport(timeout: $timeout, redactKey: $this->key);
     }
 
     /** The request body limit, so an adapter can read no more than this. */

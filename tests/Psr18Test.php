@@ -73,36 +73,31 @@ final class Psr18Test extends TestCase
     }
 
     /**
-     * Without a stream factory the request would leave without its body, and
-     * the proxy would forward an empty identification.
+     * The proxy always sends over its own transport, which never follows a
+     * redirect, so it takes no HTTP client: one that followed a redirect
+     * would replay the proxy key before any answer came back.
      */
-    public function testTheProxyNeedsBothFactoriesAlongsideAClient(): void
+    public function testTheProxyTakesNoHttpClient(): void
     {
         $http = new CannedPsr18Client(new Response(200, [], '{"request_id":"req_1"}'));
-        $base = [
-            'proxy_key' => TestServer::PROXY_KEY,
-            'path' => '/k7x2qm4a',
-            'client_ip' => fn (ProxyRequest $request): string => '203.0.113.7',
-            'http_client' => $http,
-        ];
-
-        foreach ([[], ['request_factory' => new Psr17Factory()], ['stream_factory' => new Psr17Factory()]] as $factories) {
+        $factory = new Psr17Factory();
+        foreach ([
+            ['http_client' => $http, 'request_factory' => $factory, 'stream_factory' => $factory],
+            ['http_client' => $http],
+            ['request_factory' => $factory],
+            ['stream_factory' => $factory],
+        ] as $options) {
             try {
-                new Proxy($base + $factories);
-                self::fail('the proxy accepted a client without both factories');
+                new Proxy($options + [
+                    'proxy_key' => TestServer::PROXY_KEY,
+                    'path' => '/k7x2qm4a',
+                    'client_ip' => fn (ProxyRequest $request): string => '203.0.113.7',
+                ]);
+                self::fail('the proxy accepted '.implode(', ', array_keys($options)));
             } catch (ConfigurationException $e) {
-                self::assertStringContainsString('stream_factory', $e->getMessage());
+                self::assertStringContainsString('Unknown option', $e->getMessage());
             }
         }
-
-        $factory = new Psr17Factory();
-        $proxy = new Proxy($base + ['request_factory' => $factory, 'stream_factory' => $factory]);
-        $response = $proxy->handle(new ProxyRequest('POST', '/k7x2qm4a', [
-            'x-api-key' => TestServer::PUBLIC_KEY,
-            'origin' => 'https://shop.example.com',
-        ], '{"signals":{}}'));
-
-        self::assertSame(200, $response->status);
-        self::assertSame('{"signals":{}}', (string) $http->sent[0]->getBody());
+        self::assertSame([], $http->sent);
     }
 }

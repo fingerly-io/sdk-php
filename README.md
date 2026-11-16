@@ -41,14 +41,13 @@ Composer packages and that the client, the proxy and webhook verification all
 work in that state.
 
 Everything else is a `suggest`, pulled in only if you use it: `psr/http-client`
-to route API calls through your own HTTP stack, and
+to route event reads through your own HTTP stack, and
 `psr/http-server-middleware`, `illuminate/http` or `symfony/http-kernel` for
 whichever proxy adapter you mount.
 
 A supplied client takes a PSR-17 `request_factory`, plus a `stream_factory`
-wherever a body is sent: the `Proxy` refuses an `http_client` without both
-factories. With Guzzle (`composer require guzzlehttp/guzzle`), one object is
-both factories:
+wherever a body is sent. With Guzzle (`composer require guzzlehttp/guzzle`),
+one object is both factories:
 
 ```php
 // Redirects off and a deadline set: a supplied client owns both (see below).
@@ -60,25 +59,16 @@ $fingerly = new \Fingerly\Client(getenv('FINGERLY_SECRET_KEY'), [
     'request_factory' => $factory,
     'stream_factory' => $factory,
 ]);
-
-$proxy = new \Fingerly\Proxy([
-    'proxy_key' => getenv('FINGERLY_PROXY_KEY'),
-    'path' => '/k7x2qm4a',
-    // Your CDN's visitor header when present, otherwise the TCP peer.
-    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
-    'http_client' => $http,
-    'request_factory' => $factory,
-    'stream_factory' => $factory,
-]);
 ```
 
 > PSR-18 has no way to express "do not follow redirects" or a deadline, so a
 > supplied client owns both. The ext-curl path enforces them itself. If you
 > supply a client, disable redirects on it: an authenticated request that
-> follows one replays your secret key, or the proxy key, to another host.
-> Never give the `Proxy` a client that follows redirects. The proxy answers
-> any `3xx` that reaches it with `502` and never relays it, but a client that
-> follows the redirect itself has already sent the request on by then.
+> follows one replays your secret key to another host.
+>
+> The `Proxy` takes no HTTP client. It always sends over ext-curl with
+> redirects off, because a client that followed a redirect would replay the
+> proxy key before any answer came back.
 
 ## Deadlines
 

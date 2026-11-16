@@ -13,7 +13,6 @@ use Fingerly\Proxy\Psr15Middleware;
 use Fingerly\Proxy\SymfonyListener;
 use Illuminate\Http\Request as LaravelRequest;
 use Nyholm\Psr7\Factory\Psr17Factory;
-use Nyholm\Psr7\Response as PsrResponse;
 use Nyholm\Psr7\ServerRequest;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -344,29 +343,6 @@ final class ProxyHardeningTest extends TestCase
         }
     }
 
-    public function testARedirectAnsweredThroughASuppliedClientIsA502(): void
-    {
-        $client = new CannedPsr18Client(new PsrResponse(307, ['Location' => 'https://other.invalid/api/v1/ingest', 'Set-Cookie' => 'a=b'], ''));
-        $factory = new Psr17Factory();
-        $proxy = new Proxy([
-            'proxy_key' => TestServer::PROXY_KEY,
-            'path' => self::PATH,
-            'upstream' => 'https://upstream.invalid',
-            'http_client' => $client,
-            'request_factory' => $factory,
-            'stream_factory' => $factory,
-            'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
-        ]);
-        $response = $proxy->handle($this->identify());
-
-        self::assertCount(1, $client->sent);
-        self::assertSame('https://upstream.invalid/api/v1/ingest', (string) $client->sent[0]->getUri());
-        self::assertSame(502, $response->status);
-        self::assertArrayNotHasKey('location', $response->headers);
-        self::assertArrayNotHasKey('set-cookie', $response->headers);
-        self::assertSame('no-store', $response->headers['cache-control'] ?? null);
-    }
-
     public function testAnUpstreamStatusOutsideTheRangeIsA502(): void
     {
         foreach (['099', '600', '700', '999'] as $status) {
@@ -409,30 +385,6 @@ final class ProxyHardeningTest extends TestCase
         self::assertSame('no-store', $response->headers['cache-control'] ?? null);
         self::assertStringNotContainsString('127.0.0.1', $response->body.json_encode($response->headers));
         self::assertSame(['fingerly proxy: upstream request failed: connect'], $lines);
-    }
-
-    public function testAFailingSuppliedClientIsNotNamedInTheLogLine(): void
-    {
-        $lines = [];
-        $client = new CannedPsr18Client(new \RuntimeException('failed sending '.TestServer::PROXY_KEY.' to https://upstream.invalid/api/v1/ingest'));
-        $factory = new Psr17Factory();
-        $proxy = new Proxy([
-            'proxy_key' => TestServer::PROXY_KEY,
-            'path' => self::PATH,
-            'upstream' => 'https://upstream.invalid',
-            'http_client' => $client,
-            'request_factory' => $factory,
-            'stream_factory' => $factory,
-            'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
-            'on_error' => static function (string $line) use (&$lines): void {
-                $lines[] = $line;
-            },
-        ]);
-        $response = $proxy->handle($this->identify());
-
-        self::assertSame(502, $response->status);
-        self::assertSame('Bad gateway', $response->body);
-        self::assertSame(['fingerly proxy: upstream request failed: client'], $lines);
     }
 
     // Keys in construction errors.
