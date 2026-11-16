@@ -9,7 +9,7 @@ PHP itself and let an unauthenticated request run code on the server, so an
 unpatched runtime puts everything on it at risk, this SDK's secret key included.
 
 ```sh
-composer require fingerly/fingerly-php
+composer require fingerly/fingerly-php:^0.3.0
 ```
 
 ```php
@@ -179,7 +179,22 @@ Retry a pending read a bounded number of times, for example from a queued job.
 retention, and is never pending.
 
 The archived `document` arrives moments after the event itself, so check
-`hasDocument` rather than assuming it is there.
+`hasDocument` rather than assuming it is there, and read `$event->document`
+(`?array`, holding allow-listed `risk`, `attestation`, `ip_network` and
+`velocity` fields without raw signals, user agent or address). When a submission
+is unidentifiable (`identifiable == false`, such as insufficient entropy, a
+genuine embedded WebView, or an unmatched high-risk Web payload),
+`$event->visitorId` is `''`; there are no `deferred_token`, `deferred_signals`
+or `supplements` fields in `v: 3`.
+
+`\Fingerly\EventTrigger::V3_SIGNALS` groups the `v: 3` anti-spoofing and
+integrity signal constants on `\Fingerly\EventTrigger`:
+`SIGNAL_ATTESTATION_FAILED` (`'attestation_failed'`),
+`SIGNAL_DEVICE_INCONSISTENT` (`'device_inconsistent'`),
+`SIGNAL_REPORT_INCOMPLETE` (`'report_incomplete'`),
+`SIGNAL_TAMPERING` (`'tampering'`),
+`SIGNAL_CUSTOM_ROOT_CA` (`'custom_root_ca'`) and
+`SIGNAL_SECONDARY_USER_PROFILE` (`'secondary_user_profile'`).
 
 `Event::$projectId` names the Fingerly project the event belongs to, as a UUID
 string. It is `null` when the server is older than projects.
@@ -195,6 +210,17 @@ action using scores or visitor identifiers supplied by the browser. Tags
 correlate events; they do not replace your application's authentication or
 replay protection. Never put a personal identifier (user ID, email, install ID,
 advertising ID) in a tag: the server keeps tags in long-lived rollups.
+
+```php
+if ('' === $event->visitorId || !$event->isScored()) {
+    return 'review';
+}
+foreach ($event->triggers as $trigger) {
+    if (\Fingerly\EventTrigger::SIGNAL_ATTESTATION_FAILED === $trigger->signal) {
+        return 'refuse';
+    }
+}
+```
 
 ## Webhooks
 
@@ -448,9 +474,12 @@ construction.
 
 The caller must present a public key from the same environment as the proxy
 key, or the request gets `401`. Requests without either `Origin` or a validated
-native `X-Fingerly-SDK-Platform` header are rejected locally with `400`
-(`missing_origin`), and `x-fingerly-origin` is never synthesized from `Host` or
-the request URL. Bodies over 1 MiB get `413`. One 5 second
+native `X-Fingerly-SDK-Platform` header (`ios`, `android`, `react-native`,
+`react-native-ios`, `react-native-android`, `flutter`, `flutter-ios`,
+`flutter-android`, `lynx-ios`, `lynx-android`, `capacitor`,
+`kotlin-multiplatform`) are rejected locally with `400` (`missing_origin`), and
+`x-fingerly-origin` is never synthesized from `Host`, `Referer` or the request
+URL. Bodies over 1 MiB get `413`. One 5 second
 deadline covers the whole exchange, so an upstream that never answers, or
 answers a byte at a time, gets `504 Gateway timeout` rather than holding the
 browser's connection open. An upstream that cannot be reached, drops the
@@ -464,9 +493,9 @@ so the framework never renders its own error page in their place. Pass
 ```
 
 All incoming `x-fingerly-*`, `cookie` and `authorization` headers are stripped,
-restoring only a validated `x-fingerly-sdk-platform` alongside `idempotency-key`,
-`sec-fetch-*` and `sec-ch-ua-*`. The proxy reports itself upstream as
-`php/0.3.0`, which the dashboard shows per proxy.
+restoring only a validated `x-fingerly-sdk-platform` alongside
+`x-fingerly-host`, `idempotency-key`, `sec-fetch-*` and `sec-ch-ua-*`. The proxy
+reports itself upstream as `php/0.3.0`, which the dashboard shows per proxy.
 
 Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining`
 and `Retry-After` are relayed back, plus `Cache-Control: no-store` set by the
