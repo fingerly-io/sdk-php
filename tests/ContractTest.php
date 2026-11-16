@@ -212,6 +212,13 @@ final class ContractTest extends TestCase
 
     public function testDecodesUnidentifiableEventAndAllV3TriggerSignals(): void
     {
+        self::assertSame('attestation_downgrade', EventTrigger::SIGNAL_ATTESTATION_DOWNGRADE);
+        self::assertSame('probe_errors', EventTrigger::SIGNAL_PROBE_ERRORS);
+        self::assertSame('fetch_metadata_missing', EventTrigger::SIGNAL_FETCH_METADATA_MISSING);
+        self::assertContains(EventTrigger::SIGNAL_ATTESTATION_DOWNGRADE, EventTrigger::V3_SIGNALS);
+        self::assertContains(EventTrigger::SIGNAL_PROBE_ERRORS, EventTrigger::V3_SIGNALS);
+        self::assertContains(EventTrigger::SIGNAL_FETCH_METADATA_MISSING, EventTrigger::V3_SIGNALS);
+
         $triggers = [];
         foreach (EventTrigger::V3_SIGNALS as $signal) {
             $triggers[] = [

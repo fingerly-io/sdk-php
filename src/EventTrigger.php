@@ -9,8 +9,11 @@ final class EventTrigger
 {
     public const SIGNAL_ATTESTATION_FAILED = 'attestation_failed';
     public const SIGNAL_ATTESTATION_MISSING = 'attestation_missing';
+    public const SIGNAL_ATTESTATION_DOWNGRADE = 'attestation_downgrade';
     public const SIGNAL_DEVICE_INCONSISTENT = 'device_inconsistent';
     public const SIGNAL_REPORT_INCOMPLETE = 'report_incomplete';
+    public const SIGNAL_PROBE_ERRORS = 'probe_errors';
+    public const SIGNAL_FETCH_METADATA_MISSING = 'fetch_metadata_missing';
     public const SIGNAL_TAMPERING = 'tampering';
     public const SIGNAL_BROWSER_TAMPERING = 'browser_tampering';
     public const SIGNAL_CUSTOM_ROOT_CA = 'custom_root_ca';
@@ -18,8 +21,11 @@ final class EventTrigger
 
     public const V3_SIGNALS = [
         self::SIGNAL_ATTESTATION_FAILED,
+        self::SIGNAL_ATTESTATION_DOWNGRADE,
         self::SIGNAL_DEVICE_INCONSISTENT,
         self::SIGNAL_REPORT_INCOMPLETE,
+        self::SIGNAL_PROBE_ERRORS,
+        self::SIGNAL_FETCH_METADATA_MISSING,
         self::SIGNAL_TAMPERING,
         self::SIGNAL_CUSTOM_ROOT_CA,
         self::SIGNAL_SECONDARY_USER_PROFILE,
