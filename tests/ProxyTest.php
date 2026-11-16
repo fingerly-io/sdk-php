@@ -117,23 +117,24 @@ final class ProxyTest extends TestCase
         self::assertSame('', TestServer::header($forwarded, 'authorization'));
     }
 
-    /**
-     * The deferred report goes to the same path and the same URL; the API
-     * tells the two calls apart by their bodies.
-     */
-    public function testForwardsTheDeferredReportToTheSameUrl(): void
+    public function testPreservesRawBodyBytesVerbatimWithoutReencoding(): void
     {
-        $this->server = TestServer::always(202, '{"request_id":"req_1","duplicate":false}');
+        $rawEnvelope = '{"v":3,"signals":{"price":142.50,"order":[2,1],"space":1 }}';
+        $this->server = TestServer::always(200, self::IDENTIFIED);
         $response = $this->proxy()->handle(new ProxyRequest(
             method: 'POST',
             path: self::PATH,
-            headers: ['x-api-key' => TestServer::PUBLIC_KEY, 'content-type' => 'application/json'],
-            body: '{"token":"tok_1"}',
+            headers: [
+                'x-api-key' => TestServer::PUBLIC_KEY,
+                'origin' => 'https://shop.example.com',
+                'content-type' => 'application/json',
+            ],
+            body: $rawEnvelope,
         ));
 
-        self::assertSame(202, $response->status);
+        self::assertSame(200, $response->status);
         self::assertSame('/api/v1/ingest', $this->server->first()['path']);
-        self::assertSame('{"token":"tok_1"}', $this->server->first()['body']);
+        self::assertSame($rawEnvelope, $this->server->first()['body']);
     }
 
     /** api_version only chooses the upstream URL; the local path is the same. */
@@ -246,6 +247,8 @@ final class ProxyTest extends TestCase
 
         foreach ([
             self::PATH.'/admin',
+            self::PATH.'/supplement',
+            self::PATH.'/events/req_1/supplement',
             self::PATH.'/api/v1/identify',
             self::PATH.'x',
             '/other',
@@ -255,7 +258,9 @@ final class ProxyTest extends TestCase
         ] as $path) {
             $request = $this->identify($path);
             self::assertFalse($proxy->handles($request), $path.' was claimed');
-            self::assertSame(404, $proxy->handle($request)->status, $path.' was proxied');
+            $refusal = $proxy->handle($request);
+            self::assertSame(404, $refusal->status, $path.' was proxied');
+            self::assertSame('no-store', $refusal->headers['cache-control'] ?? null);
         }
         self::assertSame(0, $this->server->requestCount());
     }
@@ -338,7 +343,10 @@ final class ProxyTest extends TestCase
             $response = $proxy->handle(new ProxyRequest(
                 method: 'POST',
                 path: self::PATH,
-                headers: ['x-api-key' => TestServer::PUBLIC_KEY],
+                headers: [
+                    'x-api-key' => TestServer::PUBLIC_KEY,
+                    'origin' => 'https://shop.example.com',
+                ],
                 body: $body,
             ));
             self::assertSame(413, $response->status);
@@ -411,20 +419,23 @@ final class ProxyTest extends TestCase
     public function testNeverCopiesALineBreakIntoAnUpstreamHeader(): void
     {
         $this->server = TestServer::always(200, self::IDENTIFIED);
-        $this->proxy()->handle($this->identify(self::PATH, [
+        $response = $this->proxy()->handle($this->identify(self::PATH, [
+            'x-fingerly-sdk-platform' => 'ios',
             'user-agent' => "Mozilla\r\nx-evil-ua: 1",
             'origin' => "https://a.example\r\nx-evil-origin: 1",
             'idempotency-key' => "abc\nx-evil-idem: 1",
             'content-type' => "application/json\r\nx-evil-type: 1",
         ]));
 
+        self::assertSame(200, $response->status);
         $forwarded = $this->server->first();
         self::assertSame('', TestServer::header($forwarded, 'x-evil-ua'));
         self::assertSame('', TestServer::header($forwarded, 'x-evil-origin'));
         self::assertSame('', TestServer::header($forwarded, 'x-evil-idem'));
         self::assertSame('', TestServer::header($forwarded, 'x-evil-type'));
         self::assertSame('', TestServer::header($forwarded, 'x-fingerly-user-agent'));
-        self::assertSame('', TestServer::header($forwarded, 'x-fingerly-origin'));
+        self::assertArrayNotHasKey('x-fingerly-origin', $forwarded['headers']);
+        self::assertSame('ios', TestServer::header($forwarded, 'x-fingerly-sdk-platform'));
         self::assertSame('', TestServer::header($forwarded, 'idempotency-key'));
         self::assertSame('application/json', TestServer::header($forwarded, 'content-type'));
     }
@@ -612,9 +623,194 @@ final class ProxyTest extends TestCase
             'client_ip' => static fn (ProxyRequest $r): string => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
         ]);
 
-        $proxy->handle(new ProxyRequest('POST', self::PATH, ['x-api-key' => TestServer::PUBLIC_KEY], '{}', '192.0.2.44'));
+        $proxy->handle(new ProxyRequest('POST', self::PATH, [
+            'x-api-key' => TestServer::PUBLIC_KEY,
+            'origin' => 'https://shop.example.com',
+        ], '{}', '192.0.2.44'));
 
         self::assertSame('192.0.2.44', TestServer::header($this->server->first(), 'x-fingerly-client-ip'));
+    }
+
+    public function testRefusesOriginlessBrowserPostWithoutSynthesizingOrigin(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $response = $this->proxy()->handle(new ProxyRequest(
+            method: 'POST',
+            path: self::PATH,
+            headers: [
+                'x-api-key' => TestServer::PUBLIC_KEY,
+                'host' => 'shop.example.com',
+                'referer' => 'https://shop.example.com/checkout',
+            ],
+            body: '{"v":3}',
+        ));
+
+        self::assertSame(400, $response->status);
+        self::assertSame('no-store', $response->headers['cache-control'] ?? null);
+        self::assertSame('application/json', $response->headers['content-type'] ?? null);
+        $decoded = json_decode($response->body, true, 16, \JSON_THROW_ON_ERROR);
+        self::assertIsArray($decoded);
+        self::assertSame('missing_origin', $decoded['error']['code'] ?? null);
+        self::assertSame(0, $this->server->requestCount());
+    }
+
+    public function testDiscardsInvalidOrSmuggledSdkPlatformValuesWithoutOrigin(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $proxy = $this->proxy();
+
+        foreach (['web', 'browser', 'IOS', ' ios ', 'ios,android', 'electron', ''] as $invalid) {
+            $response = $proxy->handle(new ProxyRequest(
+                method: 'POST',
+                path: self::PATH,
+                headers: [
+                    'x-api-key' => TestServer::PUBLIC_KEY,
+                    'x-fingerly-sdk-platform' => $invalid,
+                    'host' => 'shop.example.com',
+                ],
+                body: '{}',
+            ));
+            self::assertSame(400, $response->status, var_export($invalid, true));
+        }
+
+        // Duplicate headers differing in case are joined rather than overwritten.
+        $smuggled = $proxy->handle(new ProxyRequest(
+            method: 'POST',
+            path: self::PATH,
+            headers: [
+                'x-api-key' => TestServer::PUBLIC_KEY,
+                'X-Fingerly-SDK-Platform' => 'ios',
+                'x-fingerly-sdk-platform' => 'android',
+            ],
+            body: '{}',
+        ));
+        self::assertSame(400, $smuggled->status);
+        self::assertSame(0, $this->server->requestCount());
+    }
+
+    public function testForwardsValidNativePlatformsWithoutOriginOrSynthesizedOrigin(): void
+    {
+        $platforms = [
+            'ios',
+            'android',
+            'react-native',
+            'react-native-ios',
+            'react-native-android',
+            'flutter',
+            'flutter-ios',
+            'flutter-android',
+            'lynx-ios',
+            'lynx-android',
+            'capacitor',
+            'kotlin-multiplatform',
+        ];
+
+        foreach ($platforms as $platform) {
+            $this->server = TestServer::always(200, self::IDENTIFIED);
+            $response = $this->proxy()->handle(new ProxyRequest(
+                method: 'POST',
+                path: self::PATH,
+                headers: [
+                    'x-api-key' => TestServer::PUBLIC_KEY,
+                    'X-FiNgErLy-SdK-pLaTfOrM' => $platform,
+                    'host' => 'shop.example.com',
+                ],
+                body: '{"v":3}',
+            ));
+
+            self::assertSame(200, $response->status, $platform);
+            $forwarded = $this->server->first();
+            self::assertSame($platform, TestServer::header($forwarded, 'x-fingerly-sdk-platform'));
+            self::assertArrayNotHasKey('x-fingerly-origin', $forwarded['headers']);
+            self::assertSame('shop.example.com', TestServer::header($forwarded, 'x-fingerly-host'));
+            $this->server->stop();
+        }
+        $this->server = null;
+    }
+
+    public function testStripsAllCallerSpoofedFingerlyHeaders(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $response = $this->proxy()->handle($this->identify(self::PATH, [
+            'host' => 'shop.example.com',
+            'x-fingerly-proxy-key' => 'fly_px_production_attacker',
+            'x-fingerly-key' => 'fly_px_production_attacker',
+            'x-fingerly-client-ip' => '198.51.100.250',
+            'x-fingerly-forwarded-for' => '198.51.100.250',
+            'x-fingerly-origin' => 'https://evil.example',
+            'x-fingerly-host' => 'evil.example',
+            'x-fingerly-edge-tls-version' => 'TLSv1.3',
+            'x-fingerly-sdk-platform' => 'web',
+            'x-fingerly-custom' => 'spoof',
+        ]));
+
+        self::assertSame(200, $response->status);
+        $forwarded = $this->server->first();
+        self::assertSame(TestServer::PROXY_KEY, TestServer::header($forwarded, 'x-fingerly-proxy-key'));
+        self::assertSame(self::CLIENT_IP, TestServer::header($forwarded, 'x-fingerly-client-ip'));
+        self::assertSame('https://shop.example.com', TestServer::header($forwarded, 'x-fingerly-origin'));
+        self::assertSame('shop.example.com', TestServer::header($forwarded, 'x-fingerly-host'));
+        self::assertArrayNotHasKey('x-fingerly-key', $forwarded['headers']);
+        self::assertArrayNotHasKey('x-fingerly-forwarded-for', $forwarded['headers']);
+        self::assertArrayNotHasKey('x-fingerly-edge-tls-version', $forwarded['headers']);
+        self::assertArrayNotHasKey('x-fingerly-sdk-platform', $forwarded['headers']);
+        self::assertArrayNotHasKey('x-fingerly-custom', $forwarded['headers']);
+    }
+
+    public function testForwardsFetchMetadataAndClientHintsAndRelays409RetryAfter(): void
+    {
+        $this->server = TestServer::always(409, '{"error":{"code":"request_in_progress"}}', [
+            'retry-after' => '1',
+            'x-request-id' => 'req_409',
+        ]);
+        $response = $this->proxy()->handle($this->identify(self::PATH, [
+            'idempotency-key' => 'idem-v3',
+            'sec-fetch-site' => 'same-origin',
+            'sec-fetch-mode' => 'cors',
+            'sec-fetch-dest' => 'empty',
+            'sec-ch-ua' => '"Chromium";v="130"',
+            'sec-ch-ua-mobile' => '?0',
+            'sec-ch-ua-platform' => '"macOS"',
+        ]));
+
+        self::assertSame(409, $response->status);
+        self::assertSame('1', $response->headers['retry-after'] ?? null);
+        self::assertSame('req_409', $response->headers['x-request-id'] ?? null);
+
+        $forwarded = $this->server->first();
+        self::assertSame('idem-v3', TestServer::header($forwarded, 'idempotency-key'));
+        self::assertSame('same-origin', TestServer::header($forwarded, 'sec-fetch-site'));
+        self::assertSame('cors', TestServer::header($forwarded, 'sec-fetch-mode'));
+        self::assertSame('empty', TestServer::header($forwarded, 'sec-fetch-dest'));
+        self::assertSame('"Chromium";v="130"', TestServer::header($forwarded, 'sec-ch-ua'));
+        self::assertSame('?0', TestServer::header($forwarded, 'sec-ch-ua-mobile'));
+        self::assertSame('"macOS"', TestServer::header($forwarded, 'sec-ch-ua-platform'));
+    }
+
+    public function testHandlesConfiguredCrossOriginCorsPreflightAndPost(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'allowed_origins' => ['https://app.example.com'],
+            'upstream' => $this->server->baseUrl(),
+            'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
+        ]);
+
+        $pre = $proxy->handle(new ProxyRequest('OPTIONS', self::PATH, ['origin' => 'https://app.example.com']));
+        self::assertSame(204, $pre->status);
+        self::assertSame('', $pre->body);
+        self::assertSame('https://app.example.com', $pre->headers['access-control-allow-origin'] ?? null);
+        self::assertStringContainsString('x-fingerly-sdk-platform', $pre->headers['access-control-allow-headers'] ?? '');
+        self::assertStringContainsString('retry-after', $pre->headers['access-control-expose-headers'] ?? '');
+
+        $forbidden = $proxy->handle(new ProxyRequest('OPTIONS', self::PATH, ['origin' => 'https://evil.example.com']));
+        self::assertSame(403, $forbidden->status);
+
+        $post = $proxy->handle($this->identify(self::PATH, ['origin' => 'https://app.example.com']));
+        self::assertSame(200, $post->status);
+        self::assertSame('https://app.example.com', $post->headers['access-control-allow-origin'] ?? null);
     }
 
     /** The callback sees the request, so it can read whatever header you trust. */

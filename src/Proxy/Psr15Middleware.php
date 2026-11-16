@@ -14,8 +14,8 @@ use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
 /**
- * Mounts the proxy as PSR-15 middleware, for Slim, Mezzio and anything else
- * that speaks it.
+ * Mounts the single-path raw-byte ingest proxy as PSR-15 middleware, for Slim,
+ * Mezzio and anything else that speaks it.
  *
  * ```php
  * $app->add(new \Fingerly\Proxy\Psr15Middleware($proxy, $responseFactory));

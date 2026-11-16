@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Mounts the proxy as Laravel middleware.
+ * Mounts the single-path raw-byte ingest proxy as Laravel middleware.
  *
  * Resolve the {@see Proxy} in a service provider, with the `path` the dashboard
  * issued, and append the middleware:

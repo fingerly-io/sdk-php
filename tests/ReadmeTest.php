@@ -53,7 +53,10 @@ final class ReadmeTest extends TestCase
         self::assertInstanceOf(Client::class, $fingerly);
         self::assertInstanceOf(Proxy::class, $proxy);
         self::assertSame(1, $fingerly->events->list()->page);
-        $response = $proxy->handle(new ProxyRequest('POST', '/k7x2qm4a', ['x-api-key' => TestServer::PUBLIC_KEY], '{"signals":{}}', '203.0.113.7'));
+        $response = $proxy->handle(new ProxyRequest('POST', '/k7x2qm4a', [
+            'x-api-key' => TestServer::PUBLIC_KEY,
+            'origin' => 'https://shop.example.com',
+        ], '{"signals":{}}', '203.0.113.7'));
         self::assertSame(200, $response->status);
         self::assertSame('{"signals":{}}', (string) $canned->sent[1]->getBody());
         self::assertSame('203.0.113.7', $canned->sent[1]->getHeaderLine('x-fingerly-client-ip'));

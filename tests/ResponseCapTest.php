@@ -47,7 +47,11 @@ final class ResponseCapTest extends TestCase
         $response = $proxy->handle(new ProxyRequest(
             method: 'POST',
             path: '/k7x2qm4a',
-            headers: ['x-api-key' => TestServer::PUBLIC_KEY, 'content-type' => 'application/json'],
+            headers: [
+                'x-api-key' => TestServer::PUBLIC_KEY,
+                'origin' => 'https://shop.example.com',
+                'content-type' => 'application/json',
+            ],
             body: '{"signals":{}}',
         ));
 

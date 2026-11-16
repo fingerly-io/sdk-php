@@ -365,7 +365,7 @@ Then point the browser SDK at the same path:
 const fingerly = await load({ apiKey: 'fly_pk_…', endpoints: '/k7x2qm4a' })
 ```
 
-The SDK posts both of its calls to exactly that path, with nothing appended.
+Client SDKs post a single identification envelope to exactly that path, with nothing appended.
 
 ### Any other framework
 
@@ -438,15 +438,19 @@ Use the path the dashboard issued. Blockers look for words such as
 
 ### What the proxy does
 
-It forwards only `POST`; any other method gets `405`, and a path that is not the
-proxy's gets `404` first. Every request goes to one URL,
-`https://api.fingerly.io/api/v1/ingest`, which tells the identification and the
-deferred report apart by their bodies. `api_version` changes the version in
-that URL and nothing else, and `upstream` its origin. Event reads need a secret
-key and stay unreachable from a browser by construction.
+It forwards only `POST` (plus `OPTIONS` when `allowed_origins` is configured);
+any other method gets `405`, and a path that is not the proxy's (including
+retired `/supplement` subpaths) gets `404` first. Every accepted request goes
+verbatim as raw bytes to one URL, `https://api.fingerly.io/api/v1/ingest`.
+`api_version` changes the version in that URL and nothing else, and `upstream`
+its origin. Event reads need a secret key and stay unreachable from a browser by
+construction.
 
-The browser must present a public key from the same environment as the proxy
-key, or the request gets `401`. Bodies over 1 MiB get `413`. One 5 second
+The caller must present a public key from the same environment as the proxy
+key, or the request gets `401`. Requests without either `Origin` or a validated
+native `X-Fingerly-SDK-Platform` header are rejected locally with `400`
+(`missing_origin`), and `x-fingerly-origin` is never synthesized from `Host` or
+the request URL. Bodies over 1 MiB get `413`. One 5 second
 deadline covers the whole exchange, so an upstream that never answers, or
 answers a byte at a time, gets `504 Gateway timeout` rather than holding the
 browser's connection open. An upstream that cannot be reached, drops the
@@ -459,10 +463,10 @@ so the framework never renders its own error page in their place. Pass
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),
 ```
 
-Only the content type, the visitor
-metadata Fingerly needs, and an `Idempotency-Key` are forwarded; customer
-cookies and authorization headers never are. The proxy reports itself upstream
-as `php/0.2.0`, which the dashboard shows per proxy.
+All incoming `x-fingerly-*`, `cookie` and `authorization` headers are stripped,
+restoring only a validated `x-fingerly-sdk-platform` alongside `idempotency-key`,
+`sec-fetch-*` and `sec-ch-ua-*`. The proxy reports itself upstream as
+`php/0.3.0`, which the dashboard shows per proxy.
 
 Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining`
 and `Retry-After` are relayed back, plus `Cache-Control: no-store` set by the

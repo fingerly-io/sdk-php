@@ -13,8 +13,8 @@ use Symfony\Component\HttpKernel\Event\RequestEvent;
 use Symfony\Component\HttpKernel\KernelEvents;
 
 /**
- * Mounts the proxy as a Symfony kernel listener, at the `path` the dashboard
- * issued, which the {@see Proxy} must be given.
+ * Mounts the single-path raw-byte ingest proxy as a Symfony kernel listener, at
+ * the `path` the dashboard issued, which the {@see Proxy} must be given.
  *
  * ```yaml
  * # config/services.yaml

@@ -97,7 +97,10 @@ final class Psr18Test extends TestCase
 
         $factory = new Psr17Factory();
         $proxy = new Proxy($base + ['request_factory' => $factory, 'stream_factory' => $factory]);
-        $response = $proxy->handle(new ProxyRequest('POST', '/k7x2qm4a', ['x-api-key' => TestServer::PUBLIC_KEY], '{"signals":{}}'));
+        $response = $proxy->handle(new ProxyRequest('POST', '/k7x2qm4a', [
+            'x-api-key' => TestServer::PUBLIC_KEY,
+            'origin' => 'https://shop.example.com',
+        ], '{"signals":{}}'));
 
         self::assertSame(200, $response->status);
         self::assertSame('{"signals":{}}', (string) $http->sent[0]->getBody());
