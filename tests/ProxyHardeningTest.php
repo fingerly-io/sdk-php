@@ -12,6 +12,7 @@ use Fingerly\Proxy\Psr15Middleware;
 use Fingerly\Proxy\SymfonyListener;
 use Illuminate\Http\Request as LaravelRequest;
 use Nyholm\Psr7\Factory\Psr17Factory;
+use Nyholm\Psr7\Response as PsrResponse;
 use Nyholm\Psr7\ServerRequest;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -121,6 +122,50 @@ final class ProxyHardeningTest extends TestCase
     {
         $this->expectException(ConfigurationException::class);
         $this->construct(['upstream' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => 'yes']);
+    }
+
+    // Upstream answers.
+
+    public function testARedirectIsNeitherFollowedNorRelayed(): void
+    {
+        foreach ([300, 301, 302, 303, 304, 307, 308] as $status) {
+            $this->server?->stop();
+            $this->server = TestServer::always($status, '', ['location' => '/api/v1/elsewhere', 'set-cookie' => 'a=b']);
+            $lines = [];
+            $response = $this->proxy($lines)->handle($this->identify());
+
+            self::assertSame(502, $response->status, (string) $status);
+            self::assertSame('Bad gateway', $response->body);
+            self::assertArrayNotHasKey('location', $response->headers);
+            self::assertArrayNotHasKey('set-cookie', $response->headers);
+            self::assertSame('no-store', $response->headers['cache-control'] ?? null);
+            self::assertSame(1, $this->server->requestCount());
+            self::assertSame('/api/v1/ingest', $this->server->first()['path']);
+            self::assertSame([sprintf('fingerly proxy: upstream answered a redirect (%d)', $status)], $lines);
+        }
+    }
+
+    public function testARedirectAnsweredThroughASuppliedClientIsA502(): void
+    {
+        $client = new CannedPsr18Client(new PsrResponse(307, ['Location' => 'https://other.invalid/api/v1/ingest', 'Set-Cookie' => 'a=b'], ''));
+        $factory = new Psr17Factory();
+        $proxy = new Proxy([
+            'proxy_key' => TestServer::PROXY_KEY,
+            'path' => self::PATH,
+            'upstream' => 'https://upstream.invalid',
+            'http_client' => $client,
+            'request_factory' => $factory,
+            'stream_factory' => $factory,
+            'client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP,
+        ]);
+        $response = $proxy->handle($this->identify());
+
+        self::assertCount(1, $client->sent);
+        self::assertSame('https://upstream.invalid/api/v1/ingest', (string) $client->sent[0]->getUri());
+        self::assertSame(502, $response->status);
+        self::assertArrayNotHasKey('location', $response->headers);
+        self::assertArrayNotHasKey('set-cookie', $response->headers);
+        self::assertSame('no-store', $response->headers['cache-control'] ?? null);
     }
 
     // Helpers.

@@ -336,13 +336,20 @@ final class Proxy
             return self::refuse(502, 'Bad gateway', $cors);
         }
 
-        // The frameworks and PSR-7 libraries throw on a status outside this
-        // range when the response is built, which would turn it into their
-        // own error page; the upstream is the one answering, so it is its
-        // failure.
+        // The frameworks and PSR-7 libraries throw on a status outside
+        // 200 to 599 when the response is built, which would turn it into
+        // their own error page; the upstream is the one answering, so it is
+        // its failure. The Fingerly API never redirects an ingest, so a 3xx
+        // is a wrong or intercepted upstream, and neither it nor its
+        // Location is relayed.
         $status = $response['status'];
         if ($status < 200 || $status > 599) {
             $this->report(sprintf('upstream answered an invalid status %d', $status));
+
+            return self::refuse(502, 'Bad gateway', $cors);
+        }
+        if ($status >= 300 && $status < 400) {
+            $this->report(sprintf('upstream answered a redirect (%d)', $status));
 
             return self::refuse(502, 'Bad gateway', $cors);
         }

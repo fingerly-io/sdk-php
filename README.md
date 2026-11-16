@@ -70,7 +70,10 @@ $proxy = new \Fingerly\Proxy([
 > PSR-18 has no way to express "do not follow redirects" or a deadline, so a
 > supplied client owns both. The ext-curl path enforces them itself. If you
 > supply a client, disable redirects on it: an authenticated request that
-> follows one replays your secret key to another host.
+> follows one replays your secret key, or the proxy key, to another host.
+> Never give the `Proxy` a client that follows redirects. The proxy answers
+> any `3xx` that reaches it with `502` and never relays it, but a client that
+> follows the redirect itself has already sent the request on by then.
 
 ## Deadlines
 
@@ -488,10 +491,11 @@ URL. Bodies over 1 MiB get `413`. One 5 second
 deadline covers the whole exchange, so an upstream that never answers, or
 answers a byte at a time, gets `504 Gateway timeout` rather than holding the
 browser's connection open. An upstream that cannot be reached, drops the
-connection, or answers a success that is not JSON gets `502 Bad gateway`. Both
-are short `text/plain` answers marked `no-store`, and the proxy never throws,
-so the framework never renders its own error page in their place. Pass
-`on_error` to hear about them, one line each:
+connection, answers a redirect, or answers a success that is not JSON gets
+`502 Bad gateway`; a redirect is never followed and its `Location` never
+relayed. Both are short `text/plain` answers marked `no-store`, and the proxy
+never throws, so the framework never renders its own error page in their
+place. Pass `on_error` to hear about them, one line each:
 
 ```php
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),

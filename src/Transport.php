@@ -250,7 +250,11 @@ final class Transport
      *
      * PSR-18 has no way to express "do not follow redirects" or a deadline, so
      * both are the supplied client's responsibility. That is the trade for
-     * routing through the host's own HTTP stack, and it is documented.
+     * routing through the host's own HTTP stack, and it is documented. A 3xx
+     * answer that reaches here is refused by the caller rather than relayed,
+     * but a client that follows redirects itself has already sent the request
+     * on before this sees anything, which is why the proxy must never be given
+     * one.
      *
      * @param array<string, string> $headers
      *
