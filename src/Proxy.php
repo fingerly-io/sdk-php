@@ -187,9 +187,10 @@ final class Proxy
         if (null !== $upstream && !is_string($upstream)) {
             throw new ConfigurationException('upstream must be a string');
         }
-        $this->upstreamUrl = Config::proxyUpstream(
+        $this->upstreamUrl = Config::bareOrigin(
             $upstream ?? Config::DEFAULT_ENDPOINT,
             $allowInsecureLoopback,
+            'upstream',
         ).'/api/'.Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null).'/ingest';
         $path = $options['path'] ?? null;
         $this->path = null === $path ? null : Config::normalizePath($path);

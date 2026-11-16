@@ -301,6 +301,6 @@ final class ContractTest extends TestCase
     {
         self::assertNotNull($this->server);
 
-        return new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        return new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
     }
 }

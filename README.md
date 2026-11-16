@@ -20,9 +20,14 @@ $page = $fingerly->events->list(['level' => 'high', 'limit' => 50]);
 ```
 
 Event reads require `fly_sk_{production|staging|development}_…` keys. Requests
-go to `https://api.fingerly.io`; the `endpoint` option overrides that for a
-local API. Public, proxy, management, malformed and unsupported keys are
-rejected before network access. Requests do not follow redirects. `get` and
+go to `https://api.fingerly.io`; the `endpoint` option overrides that. The
+secret key travels with every read, so `endpoint` must be a bare HTTPS origin,
+`https://host` or `https://host:port`, with no credentials, path, query,
+fragment, space or control character. Plain HTTP is accepted only for
+`127.0.0.1`, `localhost` or `[::1]`, and only with
+`'allow_insecure_loopback' => true`, for a local API or test harness. Public,
+proxy, management, malformed and unsupported keys are rejected before network
+access. Requests do not follow redirects. `get` and
 `list` each perform one request and never retry.
 
 Construct the client once and reuse it. Every option is validated in the

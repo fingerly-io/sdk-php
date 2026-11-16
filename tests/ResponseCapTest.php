@@ -63,7 +63,7 @@ final class ResponseCapTest extends TestCase
     public function testAReadRefusesAnOversizedBody(): void
     {
         $this->server = TestServer::always(200, self::oversized());
-        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
 
         $this->expectException(ConnectionException::class);
         $this->expectExceptionMessage('the response body is over 4 MiB');
@@ -74,7 +74,7 @@ final class ResponseCapTest extends TestCase
     {
         $body = '{"rows":[],"page":1,"page_size":5,"pad":"'.str_repeat('x', 4194304 - 100).'"}';
         $this->server = TestServer::always(200, $body);
-        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
 
         self::assertSame(1, $fingerly->events->list()->page);
     }
