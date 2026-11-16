@@ -120,4 +120,88 @@ final class ApiException extends \RuntimeException implements FingerlyException
     {
         return 404 === $this->status && 'event_pending' === $this->errorCode;
     }
+
+    /**
+     * True when no DeviceCheck token is held for the event
+     * (`404 device_check_not_held`): not an iOS event with App Attest,
+     * DeviceCheck is off, or the hour has passed. Decide without the bits.
+     */
+    public function isDeviceCheckNotHeld(): bool
+    {
+        return 404 === $this->status && 'device_check_not_held' === $this->errorCode;
+    }
+
+    /**
+     * True when the event's DeviceCheck token was already used, or the call
+     * was a retry that is not the first request made with it
+     * (`409 device_check_spent`). Use another identification.
+     */
+    public function isDeviceCheckSpent(): bool
+    {
+        return 409 === $this->status && 'device_check_spent' === $this->errorCode;
+    }
+
+    /** True when another call is using the event's token (`409 device_check_busy`). */
+    public function isDeviceCheckBusy(): bool
+    {
+        return 409 === $this->status && 'device_check_busy' === $this->errorCode;
+    }
+
+    /**
+     * True when the project's Apple key is missing, refused by Apple, or has
+     * DeviceCheck off (`409 credential_unavailable`). The token is kept.
+     */
+    public function isCredentialUnavailable(): bool
+    {
+        return 409 === $this->status && 'credential_unavailable' === $this->errorCode;
+    }
+
+    /** True when a DeviceCheck write named neither bit (`422 bits_required`). */
+    public function isBitsRequired(): bool
+    {
+        return 422 === $this->status && 'bits_required' === $this->errorCode;
+    }
+
+    /**
+     * True when Apple rejected the event's token (`422 apple_rejected`). The
+     * token is used up; {@see self::getAppleStatus()} says how Apple answered.
+     */
+    public function isAppleRejected(): bool
+    {
+        return 422 === $this->status && 'apple_rejected' === $this->errorCode;
+    }
+
+    /**
+     * True when Apple or Fingerly's storage could not answer
+     * (`503 device_check_unavailable`). The token is kept for a retry of the
+     * same request within the hour.
+     */
+    public function isDeviceCheckUnavailable(): bool
+    {
+        return 503 === $this->status && 'device_check_unavailable' === $this->errorCode;
+    }
+
+    /**
+     * Apple's HTTP status for an `apple_rejected` answer, from the error
+     * detail whose `field` is `apple_status`, or null for any other error.
+     */
+    public function getAppleStatus(): ?int
+    {
+        if (!$this->isAppleRejected() || !is_array($this->details)) {
+            return null;
+        }
+        foreach ($this->details as $detail) {
+            if (is_array($detail) && 'apple_status' === ($detail['field'] ?? null)) {
+                $issue = $detail['issue'] ?? null;
+                if (is_int($issue)) {
+                    return $issue;
+                }
+                if (is_string($issue) && 1 === preg_match('/^\d{3}$/', $issue)) {
+                    return (int) $issue;
+                }
+            }
+        }
+
+        return null;
+    }
 }

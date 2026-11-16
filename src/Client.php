@@ -36,6 +36,9 @@ final class Client
     /** Event reads under this client's secret key. */
     public readonly Events $events;
 
+    /** Reads and writes the Apple DeviceCheck bits behind an iOS event. */
+    public readonly DeviceCheck $deviceCheck;
+
     /**
      * @param string               $secretKey a server-only key, `fly_sk_{environment}_…`, whose prefix
      *                                        names the environment read
@@ -73,16 +76,14 @@ final class Client
         }
 
         $secret = new Secret($secretKey);
-        $this->events = new Events(
-            new Transport(
-                timeout: $timeout,
-                redactKey: $secret,
-                httpClient: is_object($httpClient) ? $httpClient : null,
-                requestFactory: is_object($requestFactory) ? $requestFactory : null,
-                streamFactory: is_object($options['stream_factory'] ?? null) ? $options['stream_factory'] : null,
-            ),
-            $origin.'/api/'.$apiVersion,
-            $secret,
+        $transport = new Transport(
+            timeout: $timeout,
+            redactKey: $secret,
+            httpClient: is_object($httpClient) ? $httpClient : null,
+            requestFactory: is_object($requestFactory) ? $requestFactory : null,
+            streamFactory: is_object($options['stream_factory'] ?? null) ? $options['stream_factory'] : null,
         );
+        $this->events = new Events($transport, $origin.'/api/'.$apiVersion, $secret);
+        $this->deviceCheck = new DeviceCheck($transport, $origin.'/api/'.$apiVersion, $secret);
     }
 }

@@ -223,6 +223,55 @@ foreach ($event->triggers as $trigger) {
 }
 ```
 
+## Apple DeviceCheck bits
+
+For an iOS identification whose App Attest evidence carried a DeviceCheck
+token, Fingerly holds the token for one hour, and your backend spends it once
+to read or to write the device's two Apple DeviceCheck bits. The bits mean what
+you decide; Fingerly never reads them.
+
+Apple treats each token as single-use, so one identification pays for one
+call: a read or a write, never both. A "check, then mark" flow such as a
+once-per-device free trial therefore spends two identifications:
+
+1. Query on the identification that asks for the trial. If the bits say the
+   device already had one, refuse it.
+2. Otherwise record the grant in your own data, then write the bit on the next
+   identification from that install. Until the write lands, your own record is
+   what stops a second trial.
+
+```php
+// 1. The identification that asks for the trial.
+try {
+    $bits = $fingerly->deviceCheck->query($requestId);
+    $usedOnDevice = $bits->found && $bits->bit0;
+} catch (\Fingerly\ApiException $e) {
+    if (!$e->isDeviceCheckNotHeld() && !$e->isDeviceCheckSpent()) {
+        throw $e;
+    }
+    $usedOnDevice = false; // no answer, not a verdict
+}
+
+// 2. The next identification, once the trial is granted in your own data.
+$fingerly->deviceCheck->write($nextRequestId, ['bit0' => true]);
+```
+
+A bit left out of a write keeps its value; a write must name `bit0`, `bit1` or
+both, or it throws `ConfigurationException` before anything is sent.
+
+A `503 device_check_unavailable`, a timeout or a connection failure keeps the
+token, and the SDK sends the identical request again, twice at most. Nothing
+else is retried. Apple allows a token to be retried only for the same request,
+so if you retry yourself, repeat the same call with the same bits: another
+operation or other bits on that event answer `409 device_check_spent`.
+
+`ApiException` tells the answers apart: `isDeviceCheckNotHeld()` (`404`),
+`isDeviceCheckSpent()`, `isDeviceCheckBusy()` and `isCredentialUnavailable()`
+(`409`), `isBitsRequired()` and `isAppleRejected()` (`422`, with Apple's status
+in `getAppleStatus()`), and `isDeviceCheckUnavailable()` (`503`). Apple asks
+that DeviceCheck is never the only fraud check, and that users have a way to
+have the bits reset.
+
 ## Webhooks
 
 ```php
@@ -557,7 +606,9 @@ production secrets in fixtures.
 `Client.php` holds the client and its options. `Transport.php` performs one
 HTTP exchange over a reused cURL handle or a supplied PSR-18 client, caps the
 response body, and maps failures to `ApiException`. `Secret.php` holds a key
-so that no dump or serialisation can show it. `Events.php` owns the event reads and the list filters;
+so that no dump or serialisation can show it. `Events.php` owns the event reads and the list filters, and `DeviceCheck.php`
+the DeviceCheck reads and writes, decoding into `DeviceCheckBits.php` and
+`DeviceCheckWrite.php`;
 `Event.php`, `EventPage.php`, `EventTrigger.php` and
 `WebhookEvent.php` are what they decode into, and `Json.php` reads those
 bodies without trusting their shape. `Webhook.php` verifies signatures and

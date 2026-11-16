@@ -18,6 +18,11 @@
   `sec-ch-ua-*`, and optional `allowed_origins` CORS preflight handling.
 - `Proxy` authenticates with `proxy_key` only and checks the browser's public
   key on every request; a secret key is never sent upstream.
+- `$fingerly->deviceCheck->query($requestId)` and
+  `$fingerly->deviceCheck->write($requestId, ['bit0' => true])` read and write
+  the Apple DeviceCheck bits of an iOS event, retrying only a `503` or a
+  transport failure with the identical request. `ApiException` gains a
+  predicate per DeviceCheck error code and `getAppleStatus()`.
 
 ## 0.2.0
 
