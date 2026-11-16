@@ -109,11 +109,6 @@ final class RedactionTest extends TestCase
                 'path' => '/k7x2qm4a',
                 'client_ip' => fn (ProxyRequest $request): string => '203.0.113.7',
             ]),
-            'Proxy (secret key)' => new Proxy([
-                'secret_key' => TestServer::SECRET_KEY,
-                'path' => '/k7x2qm4a',
-                'client_ip' => fn (ProxyRequest $request): string => '203.0.113.7',
-            ]),
         ];
     }
 

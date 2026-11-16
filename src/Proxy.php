@@ -44,7 +44,6 @@ final class Proxy
 
     private const OPTIONS = [
         'proxy_key',
-        'secret_key',
         'client_ip',
         'path',
         'allowed_origins',
@@ -100,13 +99,10 @@ final class Proxy
     /** Whether this process has already reported a broken client_ip callback. */
     private static bool $reportedClientIp = false;
 
-    /** Server-held proxy key, or deprecated secret key, sent only to Fingerly. */
+    /** Server-held proxy key, sent only to Fingerly as `x-fingerly-proxy-key`. */
     private readonly Secret $key;
 
-    /** Proxy keys authenticate the browser's public key; secret keys do not. */
-    private readonly bool $usesProxyKey;
-
-    /** @var array{environment: string} matched against the browser's key */
+    /** @var array{environment: string} matched against the browser's public key */
     private readonly array $scope;
 
     /** The one URL requests are forwarded to. */
@@ -153,25 +149,19 @@ final class Proxy
         Config::rejectUnknownKeys(array_keys($options), self::OPTIONS);
 
         $proxyKey = $options['proxy_key'] ?? null;
-        $secretKey = $options['secret_key'] ?? null;
-        if (null === $proxyKey && null === $secretKey) {
+        if (null === $proxyKey) {
             throw new ConfigurationException('A Fingerly proxy key is required');
         }
-        if (null !== $proxyKey && null !== $secretKey) {
-            throw new ConfigurationException('Pass proxy_key or the deprecated secret_key, not both');
+        if (!is_string($proxyKey)) {
+            throw new ConfigurationException('A valid Fingerly proxy key is required');
         }
         $clientIp = $options['client_ip'] ?? null;
         if (!is_callable($clientIp)) {
             throw new ConfigurationException('client_ip is required and must be callable');
         }
 
-        $this->usesProxyKey = null !== $proxyKey;
-        $key = (string) ($proxyKey ?? $secretKey);
-        $this->scope = Config::parseKey(
-            $key,
-            $this->usesProxyKey ? Config::KEY_PROXY : Config::KEY_SECRET,
-        );
-        $this->key = new Secret($key);
+        $this->scope = Config::parseKey($proxyKey, Config::KEY_PROXY);
+        $this->key = new Secret($proxyKey);
 
         $upstream = $options['upstream'] ?? null;
         $apiVersion = $options['api_version'] ?? null;
@@ -384,18 +374,14 @@ final class Proxy
     }
 
     /**
-     * Decides which key to present upstream.
+     * The browser's public key to forward upstream, or null to refuse.
      *
-     * With a proxy key the browser must supply a public key for the same
-     * environment, which the proxy forwards alongside its own. The deprecated
-     * secret-key mode authenticates on its own and accepts anything.
+     * The browser must supply a public key for the proxy key's environment,
+     * which is forwarded alongside the proxy key. Anything else, a secret key
+     * included, is refused before a byte leaves this host.
      */
     private function upstreamKeyFor(#[\SensitiveParameter] string $presented): ?string
     {
-        if (!$this->usesProxyKey) {
-            return $this->key->reveal();
-        }
-
         try {
             $browser = Config::parseKey($presented, Config::KEY_PUBLIC);
         } catch (ConfigurationException) {
@@ -510,9 +496,7 @@ final class Proxy
         if ('' !== $host) {
             $headers['x-fingerly-host'] = $host;
         }
-        if ($this->usesProxyKey) {
-            $headers['x-fingerly-proxy-key'] = $this->key->reveal();
-        }
+        $headers['x-fingerly-proxy-key'] = $this->key->reveal();
         foreach (self::FORWARDED_CLIENT_HEADERS as $name) {
             $value = trim(self::copyable($request->header($name)));
             if ('' !== $value) {

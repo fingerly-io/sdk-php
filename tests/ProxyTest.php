@@ -38,7 +38,6 @@ final class ProxyTest extends TestCase
         foreach ([
             ['client_ip' => $ip],
             ['proxy_key' => TestServer::PROXY_KEY],
-            ['proxy_key' => TestServer::PROXY_KEY, 'secret_key' => TestServer::SECRET_KEY, 'client_ip' => $ip],
             ['proxy_key' => TestServer::PROXY_KEY, 'client_ip' => 'not callable'],
         ] as $options) {
             try {
@@ -287,26 +286,68 @@ final class ProxyTest extends TestCase
         self::assertSame(0, $this->server->requestCount());
     }
 
+    /** A secret key is no proxy credential: the option is unknown and a proxy key is required. */
+    public function testRefusesTheSecretKeyOptionAndRequiresAProxyKey(): void
+    {
+        $ip = fn (ProxyRequest $request): string => self::CLIENT_IP;
+
+        foreach ([
+            'secret_key alone' => ['secret_key' => TestServer::SECRET_KEY, 'client_ip' => $ip],
+            'secret_key beside proxy_key' => ['proxy_key' => TestServer::PROXY_KEY, 'secret_key' => TestServer::SECRET_KEY, 'client_ip' => $ip],
+        ] as $case => $options) {
+            try {
+                new Proxy($options);
+                self::fail($case.' was accepted');
+            } catch (ConfigurationException $e) {
+                self::assertStringContainsString('Unknown option: secret_key', $e->getMessage(), $case);
+                self::assertStringNotContainsString(TestServer::SECRET_KEY, $e->getMessage(), $case);
+            }
+        }
+
+        foreach ([
+            'no proxy_key' => [[], 'A Fingerly proxy key is required'],
+            'secret key as proxy_key' => [['proxy_key' => TestServer::SECRET_KEY], 'A valid Fingerly proxy key is required'],
+            'public key as proxy_key' => [['proxy_key' => TestServer::PUBLIC_KEY], 'A valid Fingerly proxy key is required'],
+            'unknown environment' => [['proxy_key' => 'fly_px_testing_abc'], 'A valid Fingerly proxy key is required'],
+            'empty proxy_key' => [['proxy_key' => ''], 'A valid Fingerly proxy key is required'],
+            'non-string proxy_key' => [['proxy_key' => false], 'A valid Fingerly proxy key is required'],
+        ] as $case => [$options, $message]) {
+            try {
+                new Proxy($options + ['client_ip' => $ip]);
+                self::fail($case.' was accepted');
+            } catch (ConfigurationException $e) {
+                self::assertSame($message, $e->getMessage(), $case);
+            }
+        }
+    }
+
     /**
-     * The deprecated mode authenticates on its own, so it accepts whatever the
-     * browser presents and never forwards it.
+     * No request carries a secret key upstream: a browser presenting one is
+     * refused locally, and an accepted request forwards the public key and
+     * the proxy key, never a `fly_sk_` key.
      */
-    public function testTheDeprecatedSecretKeyModeAuthenticatesOnItsOwn(): void
+    public function testNoSecretKeyEverTravelsUpstream(): void
     {
         $this->server = TestServer::always(200, self::IDENTIFIED);
-        $proxy = new Proxy([
-            'secret_key' => TestServer::SECRET_KEY,
-            'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
-            'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP,
-        ]);
+        $proxy = $this->proxy();
 
-        $response = $proxy->handle($this->identify(self::PATH, ['x-api-key' => '']));
+        foreach (['fly_sk_production_browserheld', TestServer::SECRET_KEY, 'fly_sk_staging_browserheld'] as $presented) {
+            $refused = $proxy->handle($this->identify(self::PATH, ['x-api-key' => $presented]));
+            self::assertSame(401, $refused->status, $presented.' was accepted');
+            self::assertSame('text/plain; charset=utf-8', $refused->headers['content-type'] ?? null);
+            self::assertSame('no-store', $refused->headers['cache-control'] ?? null);
+            self::assertStringNotContainsString($presented, $refused->body.json_encode($refused->headers));
+        }
+        self::assertSame(0, $this->server->requestCount());
+
+        $response = $proxy->handle($this->identify(self::PATH));
 
         self::assertSame(200, $response->status);
-        self::assertSame('/api/v1/ingest', $this->server->first()['path']);
-        self::assertSame(TestServer::SECRET_KEY, TestServer::header($this->server->first(), 'x-api-key'));
-        self::assertSame('', TestServer::header($this->server->first(), 'x-fingerly-proxy-key'));
+        self::assertSame(1, $this->server->requestCount());
+        $sent = $this->server->first();
+        self::assertSame(TestServer::PUBLIC_KEY, TestServer::header($sent, 'x-api-key'));
+        self::assertSame(TestServer::PROXY_KEY, TestServer::header($sent, 'x-fingerly-proxy-key'));
+        self::assertStringNotContainsString('fly_sk_', json_encode($sent['headers'], \JSON_THROW_ON_ERROR).$sent['body']);
     }
 
     public function testRefusesABodyThatDeclaresItselfTooLarge(): void

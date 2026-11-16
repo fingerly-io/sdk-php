@@ -402,7 +402,7 @@ final class ProxyHardeningTest extends TestCase
                 ['proxy_key' => 'fly_sk_production_SECRETMARK'],
                 ['proxy_key' => "fly_px_production_SECRETMARK\n"],
                 ['secret_key' => 'fly_px_production_SECRETMARK'],
-                ['proxy_key' => 'fly_px_production_SECRETMARK', 'secret_key' => 'fly_sk_production_SECRETMARK'],
+                ['secret_key' => 'fly_sk_production_SECRETMARK'],
                 ['proxy_key' => 'fly_px_production_SECRETMARK', 'upstream' => 'nope'],
                 ['proxy_key' => 'fly_px_production_SECRETMARK', 'upstream' => 'http://upstream.invalid'],
                 ['proxy_key' => 'fly_px_production_SECRETMARK', 'client_ip' => 'nope'],
