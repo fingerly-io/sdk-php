@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+- Each `AttestSkippedReason` constant carries a description of when the SDK
+  reports it, on iOS and on Android.
+- The vendored OpenAPI contract snapshot (`contract/openapi.json`) declares
+  the closed string sets as enums, matching the server.
+
 ## 0.4.0
 
 - Added named constants for the closed string sets the API sends, each a
