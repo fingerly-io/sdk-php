@@ -8,16 +8,18 @@ use Fingerly\Proxy\ProxyRequest;
 use Fingerly\Proxy\ProxyResponse;
 
 /**
- * Same-origin handler for the browser SDK.
+ * First-party ingest handler for Fingerly client SDKs.
  *
- * It exists so the browser SDK can post to a path on your own domain instead
- * of Fingerly, because content blockers refuse third-party requests and a
- * refused identification is a visitor never identified. The SDK posts both of
- * its calls to that one path, and this forwards each to Fingerly's one ingest
- * URL, never anywhere else and never to event reads: reading events needs a
- * secret key and must stay unreachable from a browser. It sends only vetted
- * visitor metadata, never passes on customer cookies or authorization headers,
- * and relays nothing back that names Fingerly.
+ * It exists so client SDKs can post to a path on your own domain instead of
+ * Fingerly, because content blockers refuse third-party requests and a refused
+ * identification is a visitor never identified. Client SDKs post a single
+ * identification envelope to that one path, and this forwards its raw bytes
+ * verbatim to Fingerly's one ingest URL, never anywhere else and never to event
+ * reads: reading events needs a secret key and must stay unreachable from a
+ * browser. It strips all caller-supplied `x-fingerly-*`, `cookie` and
+ * `authorization` headers (restoring only a validated
+ * `x-fingerly-sdk-platform`), never synthesizes `x-fingerly-origin`, and relays
+ * nothing back that names Fingerly.
  *
  * {@see self::handle()} is the whole interface, so a framework without one of
  * the bundled adapters needs about ten lines of glue:
@@ -42,21 +44,36 @@ final class Proxy
 
     private const OPTIONS = [
         'proxy_key',
-        'secret_key',
         'client_ip',
         'path',
+        'allowed_origins',
         'api_version',
         'upstream',
+        'allow_insecure_loopback',
         'max_body_bytes',
         'timeout',
-        'http_client',
-        'request_factory',
-        'stream_factory',
         'on_error',
     ];
 
     /** What this proxy reports itself as upstream; shown per proxy in the dashboard. */
     private const PROXY_VERSION = 'php/'.Client::VERSION;
+
+    /** JSON refusal when both Origin and a validated native platform header are absent. */
+    private const MISSING_ORIGIN_JSON = '{"error":{"code":"missing_origin","message":"Missing origin","status":400}}';
+
+    /** Exact lowercase native and bridge identifiers allowed in x-fingerly-sdk-platform. */
+    private const ALLOWED_PLATFORMS = '/\A(ios|android|react-native|react-native-ios|react-native-android|flutter|flutter-ios|flutter-android|lynx-ios|lynx-android|capacitor|kotlin-multiplatform)\z/';
+
+    /** Allowlisted client headers forwarded verbatim when present and header-safe. */
+    private const FORWARDED_CLIENT_HEADERS = [
+        'idempotency-key',
+        'sec-fetch-site',
+        'sec-fetch-mode',
+        'sec-fetch-dest',
+        'sec-ch-ua',
+        'sec-ch-ua-mobile',
+        'sec-ch-ua-platform',
+    ];
 
     /**
      * The response headers relayed to the browser, and nothing else. A content
@@ -82,13 +99,10 @@ final class Proxy
     /** Whether this process has already reported a broken client_ip callback. */
     private static bool $reportedClientIp = false;
 
-    /** Server-held proxy key, or deprecated secret key, sent only to Fingerly. */
+    /** Server-held proxy key, sent only to Fingerly as `x-fingerly-proxy-key`. */
     private readonly Secret $key;
 
-    /** Proxy keys authenticate the browser's public key; secret keys do not. */
-    private readonly bool $usesProxyKey;
-
-    /** @var array{environment: string} matched against the browser's key */
+    /** @var array{environment: string} matched against the browser's public key */
     private readonly array $scope;
 
     /** The one URL requests are forwarded to. */
@@ -96,6 +110,9 @@ final class Proxy
 
     /** The one path answered, or null to answer wherever the framework routes. */
     private readonly ?string $path;
+
+    /** @var list<string> configured cross-origin CORS origins */
+    private readonly array $allowedOrigins;
 
     private readonly int $maxBodyBytes;
     private readonly Transport $transport;
@@ -111,11 +128,12 @@ final class Proxy
     /**
      * @param array<string, mixed> $options `proxy_key` and `client_ip` are required; `client_ip`
      *                                      is a `callable(ProxyRequest): string`. The rest are
-     *                                      `path`, `api_version`, `upstream`, `max_body_bytes`,
+     *                                      `path`, `api_version`, `upstream` (a bare HTTPS origin),
+     *                                      `allow_insecure_loopback` (true lets `upstream` be
+     *                                      plain HTTP on 127.0.0.1, localhost or [::1] for a
+     *                                      local test harness), `max_body_bytes`,
      *                                      `timeout`, `on_error` (a `callable(string): void`
-     *                                      given one line per upstream failure), and a PSR-18
-     *                                      `http_client` with its `request_factory` and
-     *                                      `stream_factory`. It is
+     *                                      given one line per upstream failure). It is
      *                                      deliberately not a shape: these come from environment
      *                                      variables and config files, where every value is
      *                                      `mixed`, and validating them here is the point. An
@@ -126,36 +144,42 @@ final class Proxy
      */
     public function __construct(#[\SensitiveParameter] array $options)
     {
-        Config::rejectUnknown($options, self::OPTIONS);
+        // Names only: an exception thrown from a helper that was handed the
+        // whole array would carry the key in its trace arguments.
+        Config::rejectUnknownKeys(array_keys($options), self::OPTIONS);
 
         $proxyKey = $options['proxy_key'] ?? null;
-        $secretKey = $options['secret_key'] ?? null;
-        if (null === $proxyKey && null === $secretKey) {
+        if (null === $proxyKey) {
             throw new ConfigurationException('A Fingerly proxy key is required');
         }
-        if (null !== $proxyKey && null !== $secretKey) {
-            throw new ConfigurationException('Pass proxy_key or the deprecated secret_key, not both');
+        if (!is_string($proxyKey)) {
+            throw new ConfigurationException('A valid Fingerly proxy key is required');
         }
         $clientIp = $options['client_ip'] ?? null;
         if (!is_callable($clientIp)) {
             throw new ConfigurationException('client_ip is required and must be callable');
         }
 
-        $this->usesProxyKey = null !== $proxyKey;
-        $key = (string) ($proxyKey ?? $secretKey);
-        $this->scope = Config::parseKey(
-            $key,
-            $this->usesProxyKey ? Config::KEY_PROXY : Config::KEY_SECRET,
-        );
-        $this->key = new Secret($key);
+        $this->scope = Config::parseKey($proxyKey, Config::KEY_PROXY);
+        $this->key = new Secret($proxyKey);
 
         $upstream = $options['upstream'] ?? null;
         $apiVersion = $options['api_version'] ?? null;
-        $this->upstreamUrl = Config::normalizeOrigin(
-            is_string($upstream) ? $upstream : Config::DEFAULT_ENDPOINT,
+        $allowInsecureLoopback = $options['allow_insecure_loopback'] ?? false;
+        if (!is_bool($allowInsecureLoopback)) {
+            throw new ConfigurationException('allow_insecure_loopback must be a boolean');
+        }
+        if (null !== $upstream && !is_string($upstream)) {
+            throw new ConfigurationException('upstream must be a string');
+        }
+        $this->upstreamUrl = Config::bareOrigin(
+            $upstream ?? Config::DEFAULT_ENDPOINT,
+            $allowInsecureLoopback,
+            'upstream',
         ).'/api/'.Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null).'/ingest';
         $path = $options['path'] ?? null;
         $this->path = null === $path ? null : Config::normalizePath($path);
+        $this->allowedOrigins = self::normalizeAllowedOrigins($options['allowed_origins'] ?? null);
         $this->maxBodyBytes = Config::positiveInt(
             $options['max_body_bytes'] ?? self::DEFAULT_MAX_BODY_BYTES,
             'max_body_bytes',
@@ -169,17 +193,10 @@ final class Proxy
         }
         $this->onError = $onError;
 
-        if (null !== ($options['http_client'] ?? null)
-            && (null === ($options['request_factory'] ?? null) || null === ($options['stream_factory'] ?? null))) {
-            throw new ConfigurationException('request_factory and stream_factory are required alongside http_client');
-        }
-        $this->transport = new Transport(
-            timeout: $timeout,
-            redactKey: $this->key,
-            httpClient: is_object($options['http_client'] ?? null) ? $options['http_client'] : null,
-            requestFactory: is_object($options['request_factory'] ?? null) ? $options['request_factory'] : null,
-            streamFactory: is_object($options['stream_factory'] ?? null) ? $options['stream_factory'] : null,
-        );
+        // Always the bundled ext-curl transport, which never follows a
+        // redirect. A supplied HTTP client could, and would replay the proxy
+        // key to wherever the redirect pointed before any answer came back.
+        $this->transport = new Transport(timeout: $timeout, redactKey: $this->key);
     }
 
     /** The request body limit, so an adapter can read no more than this. */
@@ -214,7 +231,7 @@ final class Proxy
     }
 
     /**
-     * Handles one browser request.
+     * Handles one client SDK request.
      *
      * Every refusal is produced here, before anything reaches Fingerly.
      */
@@ -223,28 +240,59 @@ final class Proxy
         // A body on a HEAD answer would be read as the start of the next
         // response on a kept-alive connection, and some servers (Swoole among
         // them) write whatever they are handed.
-        $head = 'HEAD' === strtoupper($request->method);
+        // The method is matched exactly, as the contract and HTTP spell it:
+        // `post` is not `POST`. The HEAD test is the one place case is
+        // ignored, because it only decides whether to leave the body out.
+        $method = $request->method;
+        $head = 0 === strcasecmp($method, 'HEAD');
         if (!$this->handles($request)) {
             return self::refuse(404, $head ? '' : 'Not Found');
         }
-        if ('POST' !== strtoupper($request->method)) {
-            return self::refuse(405, $head ? '' : 'Method Not Allowed', ['allow' => 'POST']);
+
+        // Step 1: Capture validated x-fingerly-sdk-platform before stripping x-fingerly-*.
+        $rawPlatform = $request->header('x-fingerly-sdk-platform');
+        $sdkPlatform = 1 === preg_match(self::ALLOWED_PLATFORMS, $rawPlatform) ? $rawPlatform : '';
+        $origin = trim(self::copyable($request->header('origin')));
+        $corsOrigin = ('' !== $origin && in_array($origin, $this->allowedOrigins, true)) ? $origin : null;
+        $cors = self::corsHeaders($corsOrigin);
+
+        if ([] !== $this->allowedOrigins && 'OPTIONS' === $method) {
+            if ('' !== $origin && null === $corsOrigin) {
+                return self::refuse(403, 'Forbidden');
+            }
+
+            return new ProxyResponse(
+                204,
+                ['cache-control' => 'no-store', 'allow' => 'POST, OPTIONS'] + $cors,
+                '',
+            );
+        }
+
+        if ('POST' !== $method) {
+            $allow = [] === $this->allowedOrigins ? 'POST' : 'POST, OPTIONS';
+
+            return self::refuse(405, $head ? '' : 'Method Not Allowed', ['allow' => $allow] + $cors);
         }
 
         $apiKey = $this->upstreamKeyFor($request->header('x-api-key'));
         if (null === $apiKey) {
-            return self::refuse(401, 'Unauthorized');
+            return self::refuse(401, 'Unauthorized', $cors);
+        }
+
+        // Step 4: Enforce Origin / native-platform gate (never synthesize X-Fingerly-Origin).
+        if ('' === $origin && '' === $sdkPlatform) {
+            return self::jsonRefuse(400, self::MISSING_ORIGIN_JSON, $cors);
         }
 
         // Refuse on the declared size first; reading enforces the real one.
         $declared = $request->header('content-length');
         if ('' !== $declared && ctype_digit($declared) && (int) $declared > $this->maxBodyBytes) {
-            return self::refuse(413, 'Payload Too Large');
+            return self::refuse(413, 'Payload Too Large', $cors);
         }
 
         $body = $this->readBody($request);
         if (null === $body) {
-            return self::refuse(413, 'Payload Too Large');
+            return self::refuse(413, 'Payload Too Large', $cors);
         }
 
         $clientIp = $this->clientIp($request);
@@ -253,9 +301,9 @@ final class Proxy
             // forwarding anyway would record the wrong visitor or none.
             self::reportClientIpOnce($this->onError);
 
-            return self::refuse(500, self::NO_CLIENT_IP);
+            return self::refuse(500, self::NO_CLIENT_IP, $cors);
         }
-        $headers = $this->upstreamHeaders($request, $apiKey, $clientIp);
+        $headers = $this->upstreamHeaders($request, $apiKey, $clientIp, $origin, $sdkPlatform);
 
         // Give Fingerly its deadline and then answer, rather than holding the
         // browser's connection open, and never let upstream trouble surface
@@ -265,22 +313,33 @@ final class Proxy
         } catch (TimeoutException) {
             $this->report(sprintf('upstream timed out after %ss', $this->timeout));
 
-            return self::refuse(504, 'Gateway timeout');
+            return self::refuse(504, 'Gateway timeout', $cors);
         } catch (ConnectionException $e) {
-            $this->report('upstream request failed: '.preg_replace('/\Afingerly: (request failed: )?/', '', $e->getMessage()));
+            // The kind of failure only: the underlying message names the
+            // upstream host, port and URL, which do not belong in a log line.
+            $this->report('upstream request failed: '.(
+                'too_large' === $e->kind ? sprintf('the response body is over %d MiB', Transport::MAX_RESPONSE_BODY >> 20) : $e->kind
+            ));
 
-            return self::refuse(502, 'Bad gateway');
+            return self::refuse(502, 'Bad gateway', $cors);
         }
 
-        // The frameworks and PSR-7 libraries throw on a status outside this
-        // range when the response is built, which would turn it into their
-        // own error page; the upstream is the one answering, so it is its
-        // failure.
+        // The frameworks and PSR-7 libraries throw on a status outside
+        // 200 to 599 when the response is built, which would turn it into
+        // their own error page; the upstream is the one answering, so it is
+        // its failure. The Fingerly API never redirects an ingest, so a 3xx
+        // is a wrong or intercepted upstream, and neither it nor its
+        // Location is relayed.
         $status = $response['status'];
         if ($status < 200 || $status > 599) {
             $this->report(sprintf('upstream answered an invalid status %d', $status));
 
-            return self::refuse(502, 'Bad gateway');
+            return self::refuse(502, 'Bad gateway', $cors);
+        }
+        if ($status >= 300 && $status < 400) {
+            $this->report(sprintf('upstream answered a redirect (%d)', $status));
+
+            return self::refuse(502, 'Bad gateway', $cors);
         }
 
         // A success the browser cannot read would be shown as a wrong result
@@ -290,10 +349,10 @@ final class Proxy
             && null === json_decode($response['body'], true)) {
             $this->report(sprintf('upstream answered %d with a body that is not JSON', $status));
 
-            return self::refuse(502, 'Bad gateway');
+            return self::refuse(502, 'Bad gateway', $cors);
         }
 
-        return $this->relay($response);
+        return $this->relay($response, $cors);
     }
 
     /**
@@ -315,18 +374,14 @@ final class Proxy
     }
 
     /**
-     * Decides which key to present upstream.
+     * The browser's public key to forward upstream, or null to refuse.
      *
-     * With a proxy key the browser must supply a public key for the same
-     * environment, which the proxy forwards alongside its own. The deprecated
-     * secret-key mode authenticates on its own and accepts anything.
+     * The browser must supply a public key for the proxy key's environment,
+     * which is forwarded alongside the proxy key. Anything else, a secret key
+     * included, is refused before a byte leaves this host.
      */
     private function upstreamKeyFor(#[\SensitiveParameter] string $presented): ?string
     {
-        if (!$this->usesProxyKey) {
-            return $this->key->reveal();
-        }
-
         try {
             $browser = Config::parseKey($presented, Config::KEY_PUBLIC);
         } catch (ConfigurationException) {
@@ -404,29 +459,49 @@ final class Proxy
     /**
      * Builds the upstream headers.
      *
-     * Nothing is copied wholesale: only the body's content type, the visitor
-     * metadata Fingerly needs, and an idempotency key when the SDK sent one.
+     * Nothing is copied wholesale: all incoming `x-fingerly-*`, `cookie` and
+     * `authorization` headers are stripped, `x-fingerly-origin` is sent only
+     * when incoming `origin` is non-empty (never synthesized from `host` or
+     * the request URL), and a validated `x-fingerly-sdk-platform` is restored
+     * only when there is no `origin`.
      *
      * @return array<string, string>
      */
-    private function upstreamHeaders(ProxyRequest $request, #[\SensitiveParameter] string $apiKey, string $clientIp): array
-    {
-        $contentType = self::copyable($request->header('content-type'));
+    private function upstreamHeaders(
+        ProxyRequest $request,
+        #[\SensitiveParameter]
+        string $apiKey,
+        string $clientIp,
+        string $origin,
+        string $sdkPlatform,
+    ): array {
+        $contentType = trim(self::copyable($request->header('content-type')));
         $headers = [
             'content-type' => '' !== $contentType ? $contentType : 'application/json',
             'x-api-key' => $apiKey,
             'x-fingerly-client-ip' => $clientIp,
-            'x-fingerly-origin' => self::copyable($request->header('origin')),
             'x-fingerly-user-agent' => self::copyable($request->header('user-agent')),
             'x-fingerly-proxy-version' => self::PROXY_VERSION,
             'user-agent' => Transport::USER_AGENT,
         ];
-        if ($this->usesProxyKey) {
-            $headers['x-fingerly-proxy-key'] = $this->key->reveal();
+        // One channel only. A request with an Origin is a browser request, as
+        // it is when sent to the API directly, so the platform header is
+        // dropped then; the API refuses a proxied request that carries both.
+        if ('' !== $origin) {
+            $headers['x-fingerly-origin'] = $origin;
+        } elseif ('' !== $sdkPlatform) {
+            $headers['x-fingerly-sdk-platform'] = $sdkPlatform;
         }
-        $idempotency = self::copyable($request->header('idempotency-key'));
-        if ('' !== $idempotency) {
-            $headers['idempotency-key'] = $idempotency;
+        $host = trim(self::copyable($request->header('host')));
+        if ('' !== $host) {
+            $headers['x-fingerly-host'] = $host;
+        }
+        $headers['x-fingerly-proxy-key'] = $this->key->reveal();
+        foreach (self::FORWARDED_CLIENT_HEADERS as $name) {
+            $value = trim(self::copyable($request->header($name)));
+            if ('' !== $value) {
+                $headers[$name] = $value;
+            }
         }
 
         return $headers;
@@ -446,21 +521,73 @@ final class Proxy
     }
 
     /**
+     * @return list<string>
+     */
+    private static function normalizeAllowedOrigins(mixed $value): array
+    {
+        if (null === $value) {
+            return [];
+        }
+        if (!is_array($value)) {
+            throw new ConfigurationException('allowed_origins must be a list of origin strings');
+        }
+
+        $origins = [];
+        foreach ($value as $item) {
+            if (!is_string($item)) {
+                throw new ConfigurationException('allowed_origins must contain only strings');
+            }
+            $trimmed = trim($item);
+            if ('' === $trimmed || '' === self::copyable($trimmed)) {
+                throw new ConfigurationException('allowed_origins must not contain empty or invalid origins');
+            }
+            if (!in_array($trimmed, $origins, true)) {
+                $origins[] = $trimmed;
+            }
+        }
+
+        return $origins;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function corsHeaders(?string $matchedOrigin): array
+    {
+        if (null === $matchedOrigin) {
+            return [];
+        }
+
+        return [
+            'access-control-allow-origin' => $matchedOrigin,
+            'vary' => 'Origin',
+            'access-control-allow-methods' => 'POST, OPTIONS',
+            'access-control-allow-headers' => 'content-type, x-api-key, idempotency-key, x-fingerly-sdk-platform',
+            'access-control-expose-headers' => 'x-request-id, ratelimit-limit, ratelimit-remaining, retry-after',
+        ];
+    }
+
+    /**
      * Returns the upstream response to the browser, uncacheable and with only
      * the allowlisted headers.
      *
      * @param array{status: int, headers: array<string, string>, body: string} $response
+     * @param array<string, string>                                            $cors
      */
-    private function relay(array $response): ProxyResponse
+    private function relay(array $response, array $cors = []): ProxyResponse
     {
         $headers = ['cache-control' => 'no-store'];
         foreach (self::RELAYED_HEADERS as $name) {
-            if (isset($response['headers'][$name])) {
+            if (isset($response['headers'][$name]) && false === stripos($response['headers'][$name], 'fingerly')) {
                 $headers[$name] = $response['headers'][$name];
             }
         }
+        $headers += $cors;
 
         $bodiless = in_array($response['status'], self::BODILESS_STATUSES, true);
+        if ($bodiless) {
+            unset($headers['content-type']);
+        }
 
         return new ProxyResponse($response['status'], $headers, $bodiless ? '' : $response['body']);
     }
@@ -476,6 +603,20 @@ final class Proxy
             $status,
             $headers + ['content-type' => 'text/plain; charset=utf-8', 'cache-control' => 'no-store'],
             $message,
+        );
+    }
+
+    /**
+     * Builds a JSON refusal that never reaches Fingerly.
+     *
+     * @param array<string, string> $headers
+     */
+    private static function jsonRefuse(int $status, string $json, array $headers = []): ProxyResponse
+    {
+        return new ProxyResponse(
+            $status,
+            $headers + ['content-type' => 'application/json', 'cache-control' => 'no-store'],
+            $json,
         );
     }
 }

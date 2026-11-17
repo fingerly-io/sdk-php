@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Fingerly\Tests;
 
 use Fingerly\Client;
-use Fingerly\Proxy;
-use Fingerly\Proxy\ProxyRequest;
 use Nyholm\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 
@@ -35,27 +33,21 @@ final class ReadmeTest extends TestCase
             ['$canned', 'new \Nyholm\Psr7\Factory\Psr17Factory()'],
             $snippet,
         );
-        self::assertSame(2, substr_count($code, "'stream_factory' => \$factory"), 'the client and the proxy each pass both factories');
+        self::assertStringNotContainsString('Proxy', $snippet, 'the proxy takes no HTTP client');
 
-        // One answer that reads as an event page and relays as a submission.
         $canned = new CannedPsr18Client(new Response(200, ['content-type' => 'application/json'], '{"rows":[],"page":1,"page_size":5}'));
         putenv('FINGERLY_SECRET_KEY='.TestServer::SECRET_KEY);
-        putenv('FINGERLY_PROXY_KEY='.TestServer::PROXY_KEY);
 
         try {
-            $fingerly = $proxy = null;
+            $fingerly = null;
             eval($code);
         } finally {
             putenv('FINGERLY_SECRET_KEY');
-            putenv('FINGERLY_PROXY_KEY');
         }
 
         self::assertInstanceOf(Client::class, $fingerly);
-        self::assertInstanceOf(Proxy::class, $proxy);
         self::assertSame(1, $fingerly->events->list()->page);
-        $response = $proxy->handle(new ProxyRequest('POST', '/k7x2qm4a', ['x-api-key' => TestServer::PUBLIC_KEY], '{"signals":{}}', '203.0.113.7'));
-        self::assertSame(200, $response->status);
-        self::assertSame('{"signals":{}}', (string) $canned->sent[1]->getBody());
-        self::assertSame('203.0.113.7', $canned->sent[1]->getHeaderLine('x-fingerly-client-ip'));
+        self::assertCount(1, $canned->sent);
+        self::assertSame('https://api.fingerly.io/api/v1/events', (string) $canned->sent[0]->getUri());
     }
 }

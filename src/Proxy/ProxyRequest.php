@@ -49,7 +49,9 @@ final class ProxyRequest
     ) {
         $lowered = [];
         foreach ($headers as $name => $value) {
-            $lowered[strtolower((string) $name)] = (string) $value;
+            $key = strtolower((string) $name);
+            $val = (string) $value;
+            $lowered[$key] = isset($lowered[$key]) ? $lowered[$key].', '.$val : $val;
         }
         $this->headers = $lowered;
         $this->body = $body;
@@ -70,7 +72,9 @@ final class ProxyRequest
         $headers = [];
         foreach ($_SERVER as $name => $value) {
             if (is_string($name) && str_starts_with($name, 'HTTP_')) {
-                $headers[str_replace('_', '-', strtolower(substr($name, 5)))] = (string) $value;
+                $key = str_replace('_', '-', strtolower(substr($name, 5)));
+                $val = (string) $value;
+                $headers[$key] = isset($headers[$key]) ? $headers[$key].', '.$val : $val;
             }
         }
         foreach (['CONTENT_TYPE' => 'content-type', 'CONTENT_LENGTH' => 'content-length'] as $key => $header) {

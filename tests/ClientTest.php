@@ -64,7 +64,64 @@ final class ClientTest extends TestCase
     public function testValidatesTheKeyEvenWithAnEndpoint(): void
     {
         $this->expectException(ConfigurationException::class);
-        new Client(TestServer::PUBLIC_KEY, ['endpoint' => 'http://127.0.0.1:1']);
+        new Client(TestServer::PUBLIC_KEY, ['endpoint' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => true]);
+    }
+
+    /** A secret key travels with every read, so the endpoint is a bare HTTPS origin. */
+    public function testRefusesAnEndpointThatIsNotABareHttpsOrigin(): void
+    {
+        $accepted = [];
+        foreach ([
+            ['http://api.example.invalid', false],
+            ['http://api.example.invalid', true],
+            ['http://192.0.2.10:8080', true],
+            ['http://127.0.0.1:1', false],
+            ['http://localhost', false],
+            ['http://[::1]:8080', false],
+            ['https://api.example.invalid/prefix', false],
+            ['https://api.example.invalid/a/../b', false],
+            ['https://api.example.invalid?', false],
+            ['https://api.example.invalid#', false],
+            ["https://api.example.invalid\n", false],
+            ["https://api.example.invalid\r\nx-injected: 1", false],
+            ['https://api.example.invalid ', false],
+            [' https://api.example.invalid', false],
+            ['https://user@api.example.invalid', false],
+            ['https://api.example.invalid:0', false],
+            ['//api.example.invalid', false],
+        ] as [$endpoint, $optIn]) {
+            try {
+                new Client(TestServer::SECRET_KEY, ['endpoint' => $endpoint, 'allow_insecure_loopback' => $optIn]);
+                $accepted[] = json_encode($endpoint).($optIn ? ' (opted in)' : '');
+            } catch (ConfigurationException $e) {
+                self::assertStringNotContainsString(trim($endpoint), $e->getMessage());
+                self::assertStringNotContainsString(TestServer::SECRET_KEY, $e->getMessage());
+            }
+        }
+        self::assertSame([], $accepted, 'accepted: '.implode(', ', $accepted));
+
+        foreach (['https://api.example.invalid', 'https://api.example.invalid/', 'https://api.example.invalid:8443'] as $endpoint) {
+            self::assertInstanceOf(Client::class, new Client(TestServer::SECRET_KEY, ['endpoint' => $endpoint]));
+        }
+        foreach (['http://127.0.0.1:1', 'http://localhost:8080', 'http://[::1]:8080'] as $endpoint) {
+            self::assertInstanceOf(Client::class, new Client(TestServer::SECRET_KEY, ['endpoint' => $endpoint, 'allow_insecure_loopback' => true]));
+        }
+    }
+
+    public function testTheLoopbackOptInMustBeABoolean(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new Client(TestServer::SECRET_KEY, ['endpoint' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => 1]);
+    }
+
+    /** The URL a read goes to is rebuilt from the parsed origin, trailing slash and case included. */
+    public function testReadsGoToTheRebuiltOrigin(): void
+    {
+        $this->server = TestServer::always(200, '{"rows":[],"page":1,"page_size":5}');
+        $endpoint = 'HTTP'.substr($this->server->baseUrl(), 4).'/';
+        (new Client(TestServer::SECRET_KEY, ['endpoint' => $endpoint, 'allow_insecure_loopback' => true]))->events->list();
+
+        self::assertSame('/api/v1/events', $this->server->first()['path']);
     }
 
     public function testRefusesAnEndpointThatWouldLeakOrRewriteTheRequest(): void
@@ -132,7 +189,7 @@ final class ClientTest extends TestCase
     {
         $this->server = TestServer::always(200, Fixtures::event());
         $client = new Client(TestServer::SECRET_KEY, [
-            'endpoint' => $this->server->baseUrl(),
+            'endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'api_version' => 'v2',
         ]);
         $client->events->get('req_1');
@@ -284,7 +341,7 @@ final class ClientTest extends TestCase
     {
         $this->server = TestServer::always(200, Fixtures::event(), [], 5.0);
         $client = new Client(TestServer::SECRET_KEY, [
-            'endpoint' => $this->server->baseUrl(),
+            'endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'timeout' => 0.3,
         ]);
 
@@ -303,7 +360,7 @@ final class ClientTest extends TestCase
         $this->server = TestServer::start([[
             'status' => 200, 'body' => str_repeat(' ', 40).'{"rows":[],"page":1,"page_size":5}', 'trickle' => 0.05,
         ]]);
-        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'timeout' => 0.3]);
+        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true, 'timeout' => 0.3]);
 
         $started = microtime(true);
 
@@ -318,7 +375,7 @@ final class ClientTest extends TestCase
     public function testReportsAnUnreachableApiAsAConnectionFailure(): void
     {
         // Port 1 is reserved and nothing listens on it.
-        $client = new Client(TestServer::SECRET_KEY, ['endpoint' => 'http://127.0.0.1:1', 'timeout' => 2]);
+        $client = new Client(TestServer::SECRET_KEY, ['endpoint' => 'http://127.0.0.1:1', 'allow_insecure_loopback' => true, 'timeout' => 2]);
 
         $this->expectException(ConnectionException::class);
         $client->events->get('req_1');
@@ -340,6 +397,6 @@ final class ClientTest extends TestCase
     {
         self::assertNotNull($this->server);
 
-        return new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        return new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
     }
 }

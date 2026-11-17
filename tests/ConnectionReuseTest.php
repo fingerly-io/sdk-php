@@ -33,7 +33,7 @@ final class ConnectionReuseTest extends TestCase
     public function testTheClientReusesOneConnection(): void
     {
         $this->server = KeepAliveServer::start(200, self::PAGE);
-        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
 
         for ($i = 0; $i < 5; ++$i) {
             $fingerly->events->list();
@@ -84,7 +84,7 @@ final class ConnectionReuseTest extends TestCase
         $this->server = KeepAliveServer::start(200, self::PAGE);
 
         for ($i = 0; $i < 3; ++$i) {
-            (new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]))->events->list();
+            (new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]))->events->list();
         }
 
         self::assertCount(3, $this->server->requests());
@@ -98,7 +98,7 @@ final class ConnectionReuseTest extends TestCase
         return new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => '/k7x2qm4a',
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => '203.0.113.7',
         ]);
     }

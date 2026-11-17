@@ -235,10 +235,10 @@ final class Transport
             throw new TimeoutException();
         }
         if ($tooLarge || \CURLE_FILESIZE_EXCEEDED === $errno) {
-            throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20));
+            throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20), 'too_large');
         }
         if (0 !== $errno || false === $response) {
-            throw new ConnectionException('fingerly: request failed: '.$this->redact($error));
+            throw new ConnectionException('fingerly: request failed: '.$this->redact($error), self::curlKind($errno));
         }
 
         /** @var array<string, string> $received */
@@ -246,11 +246,28 @@ final class Transport
     }
 
     /**
+     * A short word for a cURL failure that names no host, port or URL.
+     */
+    private static function curlKind(int $errno): string
+    {
+        // libcurl error numbers, written out because not every PHP build
+        // defines a constant for each.
+        return match ($errno) {
+            7 => 'connect',                         // COULDNT_CONNECT
+            5, 6 => 'dns',                          // COULDNT_RESOLVE_PROXY, _HOST
+            35, 58, 59, 60, 77, 83, 90, 91 => 'tls', // SSL_CONNECT_ERROR, certificate and cipher failures
+            18, 52, 55, 56 => 'connection_lost',    // PARTIAL_FILE, GOT_NOTHING, SEND_ERROR, RECV_ERROR
+            default => 'other',
+        };
+    }
+
+    /**
      * Sends through a caller's PSR-18 client.
      *
      * PSR-18 has no way to express "do not follow redirects" or a deadline, so
      * both are the supplied client's responsibility. That is the trade for
-     * routing through the host's own HTTP stack, and it is documented.
+     * routing through the host's own HTTP stack, and it is documented. Only
+     * event reads use it; the proxy always sends over ext-curl.
      *
      * @param array<string, string> $headers
      *
@@ -298,10 +315,12 @@ final class Transport
             ];
         } catch (FingerlyException $e) {
             throw $e;
-        } catch (ClientExceptionInterface|NetworkExceptionInterface $e) {
-            throw new ConnectionException('fingerly: request failed: '.$this->redact($e->getMessage()));
+        } catch (NetworkExceptionInterface $e) {
+            throw new ConnectionException('fingerly: request failed: '.$this->redact($e->getMessage()), 'connect');
+        } catch (ClientExceptionInterface $e) {
+            throw new ConnectionException('fingerly: request failed: '.$this->redact($e->getMessage()), 'client');
         } catch (\Throwable $e) {
-            throw new ConnectionException(sprintf('fingerly: request failed: %s: %s', $e::class, $this->redact($e->getMessage())));
+            throw new ConnectionException(sprintf('fingerly: request failed: %s: %s', $e::class, $this->redact($e->getMessage())), 'client');
         }
     }
 
@@ -321,7 +340,7 @@ final class Transport
             }
             $body .= $chunk;
             if (strlen($body) > self::MAX_RESPONSE_BODY) {
-                throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20));
+                throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20), 'too_large');
             }
         }
 

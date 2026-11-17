@@ -38,7 +38,7 @@ and scores how suspicious it is.
 2. **Install.**
 
    ```sh
-   composer require fingerly/fingerly-php
+   composer require fingerly/fingerly-php:^0.3.0
    ```
 
 3. **Read an event.**
@@ -72,10 +72,12 @@ Full guide: [docs.fingerly.io/docs/sdks/php](https://docs.fingerly.io/docs/sdks/
 | I want to | Use | Read |
 | --- | --- | --- |
 | Read an event after the browser identified a visitor | `\Fingerly\Client` and `events->get` / `events->list` | [Read events](#read-events) |
+| Verify a request id before a backend action, once | `events->verify` / `events->consume` | [Verify a backend action](#verify-a-backend-action) |
+| Read or write an iOS device's Apple DeviceCheck bits | `deviceCheck->query` / `deviceCheck->write` | [Apple DeviceCheck bits](#apple-devicecheck-bits) |
 | Check a webhook delivery is genuine | `\Fingerly\Webhook::verify` and `::parse` | [Verify webhooks](#verify-webhooks) |
 | Keep the browser SDK first-party, away from content blockers | `\Fingerly\Proxy` with a Laravel, Symfony or PSR-15 adapter | [First-party proxy](#first-party-proxy-same-origin) |
 
-On this page: [Dependencies](#no-dependencies) · [Read events](#read-events) · [Verify webhooks](#verify-webhooks) · [First-party proxy](#first-party-proxy-same-origin) · [Requirements](#requirements) · [Development](#development-and-release-preparation) · [Documentation](#documentation) · [Help](#help) · [Licence](#licence)
+On this page: [Dependencies](#no-dependencies) · [Read events](#read-events) · [DeviceCheck bits](#apple-devicecheck-bits) · [Verify webhooks](#verify-webhooks) · [First-party proxy](#first-party-proxy-same-origin) · [Requirements](#requirements) · [Development](#development-and-release-preparation) · [Documentation](#documentation) · [Help](#help) · [Licence](#licence)
 
 ## No dependencies
 
@@ -88,15 +90,14 @@ Everything else is a `suggest`, pulled in only if you use it:
 
 | Package | Use it to |
 | --- | --- |
-| `psr/http-client` | route API calls through your own HTTP stack |
+| `psr/http-client` | route event reads through your own HTTP stack |
 | `psr/http-server-middleware` | mount the proxy as PSR-15 middleware |
 | `illuminate/http` | mount the proxy as Laravel middleware |
 | `symfony/http-kernel` | mount the proxy as a Symfony kernel listener |
 
 A supplied client takes a PSR-17 `request_factory`, plus a `stream_factory`
-wherever a body is sent: the `Proxy` refuses an `http_client` without both
-factories. With Guzzle (`composer require guzzlehttp/guzzle`), one object is
-both factories:
+wherever a body is sent. With Guzzle (`composer require guzzlehttp/guzzle`),
+one object is both factories:
 
 ```php
 // Redirects off and a deadline set: a supplied client owns both (see below).
@@ -108,30 +109,29 @@ $fingerly = new \Fingerly\Client(getenv('FINGERLY_SECRET_KEY'), [
     'request_factory' => $factory,
     'stream_factory' => $factory,
 ]);
-
-$proxy = new \Fingerly\Proxy([
-    'proxy_key' => getenv('FINGERLY_PROXY_KEY'),
-    'path' => '/k7x2qm4a',
-    // Your CDN's visitor header when present, otherwise the TCP peer.
-    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: (string) $r->remoteAddress,
-    'http_client' => $http,
-    'request_factory' => $factory,
-    'stream_factory' => $factory,
-]);
 ```
 
 > PSR-18 has no way to express "do not follow redirects" or a deadline, so a
 > supplied client owns both. The ext-curl path enforces them itself. If you
 > supply a client, disable redirects on it: an authenticated request that
 > follows one replays your secret key to another host.
+>
+> The `Proxy` takes no HTTP client. It always sends over ext-curl with
+> redirects off, because a client that followed a redirect would replay the
+> proxy key before any answer came back.
 
 ## Read events
 
 Event reads require `fly_sk_{production|staging|development}_…` keys. Requests
-go to `https://api.fingerly.io`; the `endpoint` option overrides that for a
-local API. Public, proxy, management, malformed and unsupported keys are
-rejected before network access. Requests do not follow redirects. `get` and
-`list` each perform one request and never retry.
+go to `https://api.fingerly.io`; the `endpoint` option overrides that. The
+secret key travels with every read, so `endpoint` must be a bare HTTPS origin,
+`https://host` or `https://host:port`, with no credentials, path, query,
+fragment, space or control character. Plain HTTP is accepted only for
+`127.0.0.1`, `localhost` or `[::1]`, and only with
+`'allow_insecure_loopback' => true`, for a local API or test harness. Public,
+proxy, management, malformed and unsupported keys are rejected before network
+access. Requests do not follow redirects. `get` and `list` each perform one
+request and never retry.
 
 Construct the client once and reuse it. Every option is validated in the
 constructor, so an invalid key or endpoint throws before anything is sent. An
@@ -179,22 +179,94 @@ Retry a pending read a bounded number of times, for example from a queued job.
 retention, and is never pending.
 
 The archived `document` arrives moments after the event itself, so check
-`hasDocument` rather than assuming it is there.
+`hasDocument` rather than assuming it is there, and read `$event->document`
+(`?array`, holding allow-listed `risk`, `attestation`, `ip_network` and
+`velocity` fields without raw signals, user agent or address). When a submission
+is unidentifiable (`identifiable == false`, such as insufficient entropy, a
+genuine embedded WebView, or an unmatched high-risk Web payload),
+`$event->visitorId` is `''`; there are no `deferred_token`, `deferred_signals`
+or `supplements` fields in `v: 3`.
+
+`\Fingerly\EventTrigger::V3_SIGNALS` groups the `v: 3` anti-spoofing and
+integrity signal constants on `\Fingerly\EventTrigger`:
+`SIGNAL_ATTESTATION_FAILED` (`'attestation_failed'`),
+`SIGNAL_ATTESTATION_DOWNGRADE` (`'attestation_downgrade'`),
+`SIGNAL_DEVICE_INCONSISTENT` (`'device_inconsistent'`),
+`SIGNAL_REPORT_INCOMPLETE` (`'report_incomplete'`),
+`SIGNAL_PROBE_ERRORS` (`'probe_errors'`),
+`SIGNAL_FETCH_METADATA_MISSING` (`'fetch_metadata_missing'`),
+`SIGNAL_WEB_TICKET_MISSING` (`'web_ticket_missing'`),
+`SIGNAL_WEB_TICKET_INVALID` (`'web_ticket_invalid'`),
+`SIGNAL_TAMPERING` (`'tampering'`),
+`SIGNAL_CUSTOM_ROOT_CA` (`'custom_root_ca'`) and
+`SIGNAL_SECONDARY_USER_PROFILE` (`'secondary_user_profile'`).
 
 `Event::$projectId` names the Fingerly project the event belongs to, as a UUID
 string. It is `null` when the server is older than projects.
 
 ### Verify a backend action
 
-Read the event with a server-only key. Check that its tag matches your action,
-that it is recent, that its environment is correct, and that it was scored.
-Apply your own policy to the server's verdict. A pending event
-(`isPending()`) is not a verdict: retry after `getRetryAfter()` seconds or
-verify asynchronously, rather than refusing the action. Do not authorize an
-action using scores or visitor identifiers supplied by the browser. Tags
-correlate events; they do not replace your application's authentication or
-replay protection. Never put a personal identifier (user ID, email, install ID,
-advertising ID) in a tag: the server keeps tags in long-lived rollups.
+Send the request id from the browser or app to your backend, and verify it
+there with a server-only key. Do not authorize an action using scores or
+visitor identifiers supplied by the browser.
+
+`$fingerly->events->verify()` reads the event and runs these checks in order,
+stopping at the first that fails. `$result->reason` names it, as one of the
+`\Fingerly\EventVerification::REASON_*` constants:
+
+1. `not_found`: there is no such event. `$result->event` is null only here.
+2. `too_old`: it happened more than `max_age_seconds` ago (300 by default), or
+   its time cannot be read.
+3. `tag_mismatch`: you passed `tag` and the event's tag is not exactly it. An
+   untagged event never matches.
+4. `unidentifiable`: the event's `visitorId` is `''`.
+5. `unscored`: the event has no suspect score.
+6. `already_consumed`: another call already consumed the event.
+
+When every other check passes, `verify` consumes the event last, so one event
+backs one decision: a replayed request id answers `already_consumed`. Pass
+`'consume' => false` to check without consuming. Then `$result->ok` is true
+and `$result->reason` is `''`.
+
+`verify` never judges the score, the level or the triggers. Your policy
+decides what they mean for the action, after `ok`:
+
+```php
+$result = $fingerly->events->verify($requestId, [
+    'tag' => 'checkout',
+    'max_age_seconds' => 300,
+]);
+if (!$result->ok) {
+    return 'refuse'; // $result->reason says why
+}
+$event = $result->event;
+if ('high' === $event->suspectLevel) {
+    return 'review';
+}
+foreach ($event->triggers as $trigger) {
+    if (\Fingerly\EventTrigger::SIGNAL_ATTESTATION_FAILED === $trigger->signal) {
+        return 'refuse';
+    }
+}
+```
+
+A pending event (`isPending()`) is not a verdict, so `verify` throws it as an
+`ApiException`, along with every other error: retry after `getRetryAfter()`
+seconds or verify asynchronously, rather than refusing the action. An unknown
+option, a `max_age_seconds` that is not a positive integer, an empty `tag` or a
+`consume` that is not a boolean throws `ConfigurationException` before anything
+is sent.
+
+`$fingerly->events->consume($requestId)` consumes an event on its own. The
+first call returns an `EventConsumption` whose `first` is true; any later call
+throws `\Fingerly\EventAlreadyConsumedException`, an `ApiException`
+(`409 event_already_consumed`, `isAlreadyConsumed()`) whose `getConsumedAt()`
+says when. It is never retried.
+
+Tags correlate events; they do not replace your application's authentication
+or replay protection.
+Never put a personal identifier (user ID, email, install ID, advertising ID) in
+a tag: the server keeps tags in long-lived rollups.
 
 ### Errors
 
@@ -205,6 +277,7 @@ handles the lot, and the concrete classes tell them apart:
 | --- | --- |
 | `ConfigurationException` | An option was rejected. Nothing was sent. It is an `InvalidArgumentException`, because a key that was never valid will not become valid on a retry. |
 | `ApiException` | The API answered with a non-2xx status, a redirect included. |
+| `EventAlreadyConsumedException` | An `ApiException` for `409 event_already_consumed`: the event was already consumed, at `getConsumedAt()`. |
 | `TimeoutException` | The request deadline elapsed. |
 | `ConnectionException` | The API could not be reached, the connection failed mid-response, or the response body was over 4 MiB. |
 
@@ -254,6 +327,55 @@ built per request reuses them too. On PHP 8.2 to 8.4 under PHP-FPM each request
 that builds a new client opens a new connection; at a few hundred proxied
 requests a second per host, run PHP 8.5 or a worker runtime. No cookies are
 kept, and redirects are never followed.
+
+## Apple DeviceCheck bits
+
+For an iOS identification whose App Attest evidence carried a DeviceCheck
+token, Fingerly holds the token for one hour, and your backend spends it once
+to read or to write the device's two Apple DeviceCheck bits. The bits mean what
+you decide; Fingerly never reads them.
+
+Apple treats each token as single-use, so one identification pays for one
+call: a read or a write, never both. A "check, then mark" flow such as a
+once-per-device free trial therefore spends two identifications:
+
+1. Query on the identification that asks for the trial. If the bits say the
+   device already had one, refuse it.
+2. Otherwise record the grant in your own data, then write the bit on the next
+   identification from that install. Until the write lands, your own record is
+   what stops a second trial.
+
+```php
+// 1. The identification that asks for the trial.
+try {
+    $bits = $fingerly->deviceCheck->query($requestId);
+    $usedOnDevice = $bits->found && $bits->bit0;
+} catch (\Fingerly\ApiException $e) {
+    if (!$e->isDeviceCheckNotHeld() && !$e->isDeviceCheckSpent()) {
+        throw $e;
+    }
+    $usedOnDevice = false; // no answer, not a verdict
+}
+
+// 2. The next identification, once the trial is granted in your own data.
+$fingerly->deviceCheck->write($nextRequestId, ['bit0' => true]);
+```
+
+A bit left out of a write keeps its value; a write must name `bit0`, `bit1` or
+both, or it throws `ConfigurationException` before anything is sent.
+
+A `503 device_check_unavailable`, a timeout or a connection failure keeps the
+token, and the SDK sends the identical request again, twice at most. Nothing
+else is retried. Apple allows a token to be retried only for the same request,
+so if you retry yourself, repeat the same call with the same bits: another
+operation or other bits on that event answer `409 device_check_spent`.
+
+`ApiException` tells the answers apart: `isDeviceCheckNotHeld()` (`404`),
+`isDeviceCheckSpent()`, `isDeviceCheckBusy()` and `isCredentialUnavailable()`
+(`409`), `isBitsRequired()` and `isAppleRejected()` (`422`, with Apple's status
+in `getAppleStatus()`), and `isDeviceCheckUnavailable()` (`503`). Apple asks
+that DeviceCheck is never the only fraud check, and that users have a way to
+have the bits reset.
 
 ## Verify webhooks
 
@@ -460,7 +582,8 @@ Then point the browser SDK at the same path:
 const fingerly = await load({ apiKey: 'fly_pk_…', endpoints: '/k7x2qm4a' })
 ```
 
-The SDK posts both of its calls to exactly that path, with nothing appended.
+Client SDKs post a single identification envelope to exactly that path, with
+nothing appended.
 
 > **`client_ip` is the one thing you must get right.** Resolve it from a header
 > your own infrastructure sets, such as your load balancer's or CDN's, and fall
@@ -522,20 +645,24 @@ Use the path the dashboard issued. Blockers look for words such as
 
 | Rule | Behaviour |
 | --- | --- |
-| Methods and paths | It forwards only `POST`; any other method gets `405`, and a path that is not the proxy's gets `404` first. |
-| Upstream | Every request goes to one URL, `https://api.fingerly.io/api/v1/ingest`, which tells the identification and the deferred report apart by their bodies. `api_version` changes the version in that URL and nothing else, and `upstream` its origin. |
+| Methods and paths | It forwards only `POST` (plus `OPTIONS` when `allowed_origins` is configured), matched exactly: any other method, `post` included, gets `405`, and a path that is not the proxy's (including `/supplement` subpaths) gets `404` first. |
+| Upstream | Every accepted request goes verbatim as raw bytes to one URL, `https://api.fingerly.io/api/v1/ingest`. `api_version` changes the version in that URL and nothing else, and `upstream` its origin. |
+| Upstream origin | `upstream` must be a bare HTTPS origin, `https://host` or `https://host:port`, with no credentials, path, query, fragment, space or control character. Plain HTTP is accepted only for `127.0.0.1`, `localhost` or `[::1]`, and only with `'allow_insecure_loopback' => true`, for a local test harness. The proxy key travels with every forwarded request, so anything else is refused when the `Proxy` is constructed. |
 | Event reads | Need a secret key and stay unreachable from a browser by construction. |
-| Public key | The browser must present a public key from the same environment as the proxy key, or the request gets `401`. |
+| Public key | The caller must present a public key from the same environment as the proxy key, or the request gets `401`. |
+| Origin or platform | Requests without either `Origin` or a validated native `X-Fingerly-SDK-Platform` header (`ios`, `android`, `react-native`, `react-native-ios`, `react-native-android`, `flutter`, `flutter-ios`, `flutter-android`, `lynx-ios`, `lynx-android`, `capacitor`, `kotlin-multiplatform`) are rejected locally with `400` (`missing_origin`), and `x-fingerly-origin` is never synthesized from `Host`, `Referer` or the request URL. |
 | Body size | Bodies over 1 MiB get `413`. |
 | Deadline | One 5 second deadline covers the whole exchange, so an upstream that never answers, or answers a byte at a time, gets `504 Gateway timeout` rather than holding the browser's connection open. |
-| Upstream failures | An upstream that cannot be reached, drops the connection, or answers a success that is not JSON gets `502 Bad gateway`. |
+| Upstream failures | An upstream that cannot be reached, drops the connection, answers a redirect or a status outside 200 to 599, or answers a success that is not JSON gets `502 Bad gateway`; a redirect is never followed and its `Location` never relayed. |
 | Error answers | `504` and `502` are short `text/plain` answers marked `no-store`, and the proxy never throws, so the framework never renders its own error page in their place. |
-| Forwarded upstream | Only the content type, the visitor metadata Fingerly needs, and an `Idempotency-Key`. Customer cookies and authorization headers never are. |
-| Proxy identity | The proxy reports itself upstream as `php/0.2.0`, which the dashboard shows per proxy. |
+| Forwarded upstream | All incoming `x-fingerly-*`, `cookie` and `authorization` headers are stripped. `x-fingerly-host`, `idempotency-key`, `sec-fetch-*` and `sec-ch-ua-*` are forwarded, and one channel header: `x-fingerly-origin` when the request has an `Origin`, otherwise the validated `x-fingerly-sdk-platform`. A request with both is a browser request, as it is when sent to the API directly. |
+| Proxy identity | The proxy reports itself upstream as `php/0.3.0`, which the dashboard shows per proxy. |
 | Relayed back | Only `Content-Type`, `X-Request-Id`, `RateLimit-Limit`, `RateLimit-Remaining` and `Retry-After`, plus `Cache-Control: no-store` set by the proxy. It is an allowlist, so nothing on the response names Fingerly, whatever the API adds in future. |
 | Laravel and Symfony | The relayed `Cache-Control: no-store` arrives as `no-store, private`, because `ResponseHeaderBag` appends a visibility directive to any `Cache-Control` without one. That is a narrowing rather than a weakening, so it is left alone. |
 
-Pass `on_error` to hear about `504` and `502` answers, one line each:
+Pass `on_error` to hear about `504` and `502` answers, one line each. A line
+names the kind of failure (`connect`, `dns`, `tls`, ...), never the upstream
+host, the URL or a key:
 
 ```php
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),
@@ -579,7 +706,11 @@ production secrets in fixtures.
 `Client.php` holds the client and its options. `Transport.php` performs one
 HTTP exchange over a reused cURL handle or a supplied PSR-18 client, caps the
 response body, and maps failures to `ApiException`. `Secret.php` holds a key
-so that no dump or serialisation can show it. `Events.php` owns the event reads and the list filters;
+so that no dump or serialisation can show it. `Events.php` owns the event reads, the list filters, verification and
+consumption, decoding into `EventVerification.php` and `EventConsumption.php`
+and throwing `EventAlreadyConsumedException.php`, and `DeviceCheck.php`
+the DeviceCheck reads and writes, decoding into `DeviceCheckBits.php` and
+`DeviceCheckWrite.php`;
 `Event.php`, `EventPage.php`, `EventTrigger.php` and
 `WebhookEvent.php` are what they decode into, and `Json.php` reads those
 bodies without trusting their shape. `Webhook.php` verifies signatures and

@@ -57,31 +57,55 @@ final class Config
     }
 
     /**
-     * Normalises a caller-supplied API origin.
+     * Validates a caller-supplied API origin: the client's `endpoint` or the
+     * proxy's `upstream`.
      *
-     * Credentials, queries and fragments are refused: they would be attached
-     * to every authenticated request, and embedded credentials would leak on a
-     * redirect. The result has no trailing slash.
+     * A key travels with every request sent there, so the value is held to a
+     * bare origin: `https://host` or `https://host:port`, printable ASCII
+     * only, with no credentials, path, query or fragment. Plain HTTP is
+     * accepted only for 127.0.0.1, localhost or [::1], and only when the
+     * caller opted in with `allow_insecure_loopback`, for a local test
+     * harness. The result is rebuilt from the parsed parts rather than the
+     * input. No error names the value, which may have been pasted with a
+     * secret in it.
+     *
+     * @param 'endpoint'|'upstream' $option the option name errors refer to
      *
      * @throws ConfigurationException
      */
-    public static function normalizeOrigin(string $value): string
+    public static function bareOrigin(#[\SensitiveParameter] string $value, bool $allowInsecureLoopback, string $option): string
     {
+        $invalid = $option.' must be a bare origin such as https://api.fingerly.io, with no credentials, path, query or fragment';
+        if (1 !== preg_match('/\A[\x21-\x7e]+\z/', $value) || 1 === preg_match('/[?#@\\\]/', $value)) {
+            throw new ConfigurationException($invalid);
+        }
         $parts = parse_url($value);
         if (false === $parts
             || !isset($parts['scheme'], $parts['host'])
-            || !in_array(strtolower($parts['scheme']), ['http', 'https'], true)
-            || isset($parts['user'])
-            || isset($parts['pass'])
-            || isset($parts['query'])
-            || isset($parts['fragment'])
+            || isset($parts['user']) || isset($parts['pass'])
+            || isset($parts['query']) || isset($parts['fragment'])
+            || !in_array($parts['path'] ?? '', ['', '/'], true)
+            || (isset($parts['port']) && ($parts['port'] < 1 || $parts['port'] > 65535))
         ) {
-            throw new ConfigurationException(
-                'endpoint must be an HTTP(S) URL without credentials, query, or fragment',
-            );
+            throw new ConfigurationException($invalid);
+        }
+        $scheme = strtolower($parts['scheme']);
+        $host = strtolower($parts['host']);
+        if (1 !== preg_match('/\A(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])\z/', $host)) {
+            throw new ConfigurationException($invalid);
+        }
+        if ('https' !== $scheme) {
+            if ('http' !== $scheme) {
+                throw new ConfigurationException($invalid);
+            }
+            if (!$allowInsecureLoopback || !in_array($host, ['127.0.0.1', 'localhost', '[::1]'], true)) {
+                throw new ConfigurationException(
+                    $option.' must use https; plain http is allowed only for 127.0.0.1, localhost or [::1] with allow_insecure_loopback',
+                );
+            }
         }
 
-        return rtrim($value, '/');
+        return $scheme.'://'.$host.(isset($parts['port']) ? ':'.$parts['port'] : '');
     }
 
     /**
@@ -157,14 +181,24 @@ final class Config
      * A misspelled option is otherwise silent, and a silently ignored timeout
      * or endpoint is exactly the kind of thing nobody notices until it matters.
      *
-     * @param array<string, mixed> $options
-     * @param list<string>         $known
+     * It takes the option names only, never the options: the array holds a
+     * key, and an exception thrown here would carry this frame's arguments
+     * in its trace.
+     *
+     * @param list<int|string> $names
+     * @param list<string>     $known
      *
      * @throws ConfigurationException
      */
-    public static function rejectUnknown(array $options, array $known): void
+    public static function rejectUnknownKeys(#[\SensitiveParameter] array $names, array $known): void
     {
-        $unknown = array_diff(array_keys($options), $known);
+        $unknown = array_map(
+            // A name is echoed only when it looks like an option name, and
+            // never when it looks like a key that ended up in the wrong place.
+            static fn (int|string $name): string => 1 === preg_match('/\A[A-Za-z0-9_]{1,64}\z/', (string) $name)
+                && !str_starts_with((string) $name, 'fly_') ? (string) $name : '(invalid name)',
+            array_values(array_diff($names, $known)),
+        );
         if ([] !== $unknown) {
             sort($unknown);
 

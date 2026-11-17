@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0
+
+- Synced the v3 single-call ingest contract snapshot (`openapi.json` and
+  `fixtures.json`), removing the retired supplement endpoint and
+  `deferred_token`.
+- Added `Event::$reason`, v3 `EventTrigger` anti-spoofing signal constants
+  (`attestation_failed`, `attestation_downgrade`, `device_inconsistent`,
+  `report_incomplete`, `probe_errors`, `fetch_metadata_missing`,
+  `web_ticket_missing`, `web_ticket_invalid`, `tampering`, `custom_root_ca`,
+  `secondary_user_profile`), optional
+  `EventTrigger::$group`, and empty `Event::$visitorId` (`""`) support for
+  unidentifiable events.
+- Enforced the v3 first-party proxy relay contract: sanitize-and-restore of
+  validated `x-fingerly-sdk-platform`, `400 missing_origin` when both `Origin`
+  and a validated native platform header are absent (never synthesizing
+  `x-fingerly-origin`), forwarding `x-fingerly-host`, `sec-fetch-*` and
+  `sec-ch-ua-*`, and optional `allowed_origins` CORS preflight handling.
+- `Proxy` authenticates with `proxy_key` only and checks the browser's public
+  key on every request; a secret key is never sent upstream.
+- `$fingerly->deviceCheck->query($requestId)` and
+  `$fingerly->deviceCheck->write($requestId, ['bit0' => true])` read and write
+  the Apple DeviceCheck bits of an iOS event, retrying only a `503` or a
+  transport failure with the identical request. `ApiException` gains a
+  predicate per DeviceCheck error code and `getAppleStatus()`.
+- Added `$fingerly->events->verify($requestId, $options)`, which reads an event
+  and checks it exists, is recent (`max_age_seconds`, 300 by default), carries
+  the expected `tag`, is identifiable and scored, then consumes it once, and
+  `$fingerly->events->consume($requestId)` with a typed
+  `EventAlreadyConsumedException` for `event_already_consumed`.
+
 ## 0.2.0
 
 - `Event::$projectId` exposes the Fingerly project an event belongs to, on

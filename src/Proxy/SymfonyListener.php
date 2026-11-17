@@ -13,8 +13,8 @@ use Symfony\Component\HttpKernel\Event\RequestEvent;
 use Symfony\Component\HttpKernel\KernelEvents;
 
 /**
- * Mounts the proxy as a Symfony kernel listener, at the `path` the dashboard
- * issued, which the {@see Proxy} must be given.
+ * Mounts the single-path raw-byte ingest proxy as a Symfony kernel listener, at
+ * the `path` the dashboard issued, which the {@see Proxy} must be given.
  *
  * ```yaml
  * # config/services.yaml
@@ -86,6 +86,17 @@ final class SymfonyListener implements EventSubscriberInterface
         return $raw === $request->getBasePath().$request->getPathInfo() ? $request->getPathInfo() : $raw;
     }
 
+    /**
+     * The method as it arrived. getMethod() uppercases it and applies any
+     * method override, and the proxy matches the wire method exactly.
+     */
+    private static function method(Request $request): string
+    {
+        $method = $request->server->get('REQUEST_METHOD');
+
+        return is_string($method) ? $method : $request->getMethod();
+    }
+
     private function toProxyRequest(Request $request): ProxyRequest
     {
         $headers = [];
@@ -96,7 +107,7 @@ final class SymfonyListener implements EventSubscriberInterface
         $body = $request->getContent(true);
 
         return new ProxyRequest(
-            method: $request->getMethod(),
+            method: self::method($request),
             path: self::path($request),
             headers: $headers,
             body: is_resource($body) ? $body : (string) $request->getContent(),

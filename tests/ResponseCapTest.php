@@ -37,7 +37,7 @@ final class ResponseCapTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => '/k7x2qm4a',
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => fn (ProxyRequest $request): string => '203.0.113.7',
             'on_error' => static function (string $line) use (&$lines): void {
                 $lines[] = $line;
@@ -47,7 +47,11 @@ final class ResponseCapTest extends TestCase
         $response = $proxy->handle(new ProxyRequest(
             method: 'POST',
             path: '/k7x2qm4a',
-            headers: ['x-api-key' => TestServer::PUBLIC_KEY, 'content-type' => 'application/json'],
+            headers: [
+                'x-api-key' => TestServer::PUBLIC_KEY,
+                'origin' => 'https://shop.example.com',
+                'content-type' => 'application/json',
+            ],
             body: '{"signals":{}}',
         ));
 
@@ -59,7 +63,7 @@ final class ResponseCapTest extends TestCase
     public function testAReadRefusesAnOversizedBody(): void
     {
         $this->server = TestServer::always(200, self::oversized());
-        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
 
         $this->expectException(ConnectionException::class);
         $this->expectExceptionMessage('the response body is over 4 MiB');
@@ -70,7 +74,7 @@ final class ResponseCapTest extends TestCase
     {
         $body = '{"rows":[],"page":1,"page_size":5,"pad":"'.str_repeat('x', 4194304 - 100).'"}';
         $this->server = TestServer::always(200, $body);
-        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        $fingerly = new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
 
         self::assertSame(1, $fingerly->events->list()->page);
     }

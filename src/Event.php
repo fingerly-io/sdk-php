@@ -16,7 +16,8 @@ final class Event
 {
     /**
      * @param string                    $requestId        the id identification returned, and the key event reads use
-     * @param string                    $visitorId        the visitor this identification resolved to
+     * @param string                    $visitorId        the visitor this identification resolved to, or `""` when the
+     *                                                    submission was unidentifiable
      * @param \DateTimeImmutable        $occurredAt       when the identification happened
      * @param string                    $state            `enriched`, or `unavailable` when the network lookup could not run
      * @param string                    $environment      the deployment the event was recorded in
@@ -57,6 +58,7 @@ final class Event
      *                                                    after this SDK was released is still reachable
      * @param null|string               $projectId        the Fingerly project the event belongs to, as a UUID string;
      *                                                    null when the server predates projects
+     * @param null|string               $reason           why enrichment did not happen, on an unavailable event
      */
     public function __construct(
         public readonly string $requestId,
@@ -89,6 +91,7 @@ final class Event
         public readonly ?array $document = null,
         public readonly array $raw = [],
         public readonly ?string $projectId = null,
+        public readonly ?string $reason = null,
     ) {}
 
     /**
@@ -106,18 +109,35 @@ final class Event
     /**
      * Builds an event from one decoded API response.
      *
+     * With `$lenient`, for {@see Events::verify()}, a missing `visitor_id`
+     * reads as `''` and a missing or unreadable `occurred_at` as the Unix
+     * epoch, so the event still comes back with the reason that rejects it.
+     *
      * @param array<string, mixed> $body
      *
      * @throws ApiException if the body is not an event this SDK can read
      *
      * @internal
      */
-    public static function fromArray(array $body): self
+    public static function fromArray(array $body, bool $lenient = false): self
     {
+        if ($lenient) {
+            $visitorId = is_string($body['visitor_id'] ?? null) ? $body['visitor_id'] : '';
+
+            try {
+                $occurredAt = Json::timestamp($body, 'occurred_at');
+            } catch (ApiException) {
+                $occurredAt = new \DateTimeImmutable('@0');
+            }
+        } else {
+            $visitorId = Json::string($body, 'visitor_id');
+            $occurredAt = Json::timestamp($body, 'occurred_at');
+        }
+
         return new self(
             requestId: Json::string($body, 'request_id'),
-            visitorId: Json::string($body, 'visitor_id'),
-            occurredAt: Json::timestamp($body, 'occurred_at'),
+            visitorId: $visitorId,
+            occurredAt: $occurredAt,
             state: Json::string($body, 'state'),
             environment: Json::string($body, 'environment'),
             platform: Json::string($body, 'platform'),
@@ -145,6 +165,7 @@ final class Event
             document: Json::nullableArray($body, 'document'),
             raw: $body,
             projectId: Json::nullableString($body, 'project_id'),
+            reason: Json::nullableString($body, 'reason'),
         );
     }
 }

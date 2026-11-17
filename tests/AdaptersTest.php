@@ -38,7 +38,13 @@ final class AdaptersTest extends TestCase
     private const PATH = '/k7x2qm4a';
 
     /** Paths that are not the proxy's, including one under it. */
-    private const OTHER_PATHS = ['/orders/42', self::PATH.'/admin', '/'];
+    private const OTHER_PATHS = [
+        '/orders/42',
+        self::PATH.'/admin',
+        self::PATH.'/supplement',
+        self::PATH.'/events/req_1/supplement',
+        '/',
+    ];
 
     private ?TestServer $server = null;
 
@@ -170,6 +176,7 @@ final class AdaptersTest extends TestCase
 
         $exact = new ServerRequest('POST', 'https://shop.example.com'.self::PATH, [
             'x-api-key' => TestServer::PUBLIC_KEY,
+            'origin' => 'https://shop.example.com',
         ], '{"signals":{}}', '1.1', ['REQUEST_URI' => self::PATH.'?x=1']);
         self::assertSame(200, $middleware->process($exact, $this->refusingHandler())->getStatusCode());
     }
@@ -214,17 +221,25 @@ final class AdaptersTest extends TestCase
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => static function (ProxyRequest $request) use (&$seen): string {
                 $seen[] = $request->remoteAddress;
 
                 return (string) $request->remoteAddress;
             },
         ]);
-        $server = ['HTTP_X_API_KEY' => TestServer::PUBLIC_KEY, 'CONTENT_TYPE' => 'application/json', 'REMOTE_ADDR' => '192.0.2.44'];
+        $server = [
+            'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'HTTP_ORIGIN' => 'https://shop.example.com',
+            'CONTENT_TYPE' => 'application/json',
+            'REMOTE_ADDR' => '192.0.2.44',
+        ];
 
         (new Psr15Middleware($proxy, new Psr17Factory()))->process(
-            new ServerRequest('POST', 'https://shop.example.com'.self::PATH, ['x-api-key' => TestServer::PUBLIC_KEY], '{}', '1.1', ['REMOTE_ADDR' => '192.0.2.44']),
+            new ServerRequest('POST', 'https://shop.example.com'.self::PATH, [
+                'x-api-key' => TestServer::PUBLIC_KEY,
+                'origin' => 'https://shop.example.com',
+            ], '{}', '1.1', ['REMOTE_ADDR' => '192.0.2.44']),
             $this->refusingHandler(),
         );
         (new LaravelMiddleware($proxy))->handle(
@@ -273,6 +288,7 @@ final class AdaptersTest extends TestCase
             'SCRIPT_NAME' => '/shop/index.php',
             'PHP_SELF' => '/shop/index.php',
             'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'HTTP_ORIGIN' => 'https://shop.example.com',
             'CONTENT_TYPE' => 'application/json',
         ], '{"signals":{}}');
 
@@ -415,7 +431,7 @@ final class AdaptersTest extends TestCase
         self::assertNotNull($this->server);
         $proxy = new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => static fn (ProxyRequest $request): string => '203.0.113.7',
         ]);
 
@@ -433,6 +449,56 @@ final class AdaptersTest extends TestCase
         }
     }
 
+    public function testEveryAdapterEnforcesOriginAndNativePlatformGate(): void
+    {
+        self::assertNotNull($this->server);
+        $rawBody = '{"v":3,"signals":{"price":142.50}}';
+        $factory = new Psr17Factory();
+        $psr15 = new Psr15Middleware($this->proxy(), $factory);
+        $laravel = new LaravelMiddleware($this->proxy());
+        $symfony = new SymfonyListener($this->proxy());
+        $kernel = new class implements HttpKernelInterface {
+            public function handle(SymfonyRequest $request, int $type = self::MAIN_REQUEST, bool $catch = true): SymfonyResponse
+            {
+                return new SymfonyResponse('not reached', 500);
+            }
+        };
+
+        $psrOriginless = new ServerRequest('POST', 'https://shop.example.com'.self::PATH, [
+            'x-api-key' => TestServer::PUBLIC_KEY,
+            'x-fingerly-origin' => 'https://spoof.example',
+        ], $rawBody);
+        self::assertSame(400, $psr15->process($psrOriginless, $this->refusingHandler())->getStatusCode());
+
+        $laravelOriginless = LaravelRequest::create(self::PATH, 'POST', [], [], [], [
+            'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'HTTP_HOST' => 'shop.example.com',
+        ], $rawBody);
+        self::assertSame(
+            400,
+            $laravel->handle($laravelOriginless, static fn (LaravelRequest $r): SymfonyResponse => new SymfonyResponse('not reached', 500))->getStatusCode(),
+        );
+
+        $symfonyOriginlessEvent = new RequestEvent($kernel, SymfonyRequest::create(self::PATH, 'POST', [], [], [], [
+            'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'HTTP_HOST' => 'shop.example.com',
+        ], $rawBody), HttpKernelInterface::MAIN_REQUEST);
+        $symfony->onKernelRequest($symfonyOriginlessEvent);
+        self::assertSame(400, $symfonyOriginlessEvent->getResponse()?->getStatusCode());
+        self::assertSame(0, $this->server->requestCount());
+
+        $psrNative = new ServerRequest('POST', 'https://shop.example.com'.self::PATH, [
+            'x-api-key' => TestServer::PUBLIC_KEY,
+            'x-fingerly-sdk-platform' => 'ios',
+            'x-fingerly-origin' => 'https://spoof.example',
+        ], $rawBody);
+        self::assertSame(200, $psr15->process($psrNative, $this->refusingHandler())->getStatusCode());
+        $forwarded = $this->server->first();
+        self::assertSame($rawBody, $forwarded['body']);
+        self::assertSame('ios', TestServer::header($forwarded, 'x-fingerly-sdk-platform'));
+        self::assertArrayNotHasKey('x-fingerly-origin', $forwarded['headers']);
+    }
+
     private function proxy(): Proxy
     {
         self::assertNotNull($this->server);
@@ -440,7 +506,7 @@ final class AdaptersTest extends TestCase
         return new Proxy([
             'proxy_key' => TestServer::PROXY_KEY,
             'path' => self::PATH,
-            'upstream' => $this->server->baseUrl(),
+            'upstream' => $this->server->baseUrl(), 'allow_insecure_loopback' => true,
             'client_ip' => static fn (ProxyRequest $request): string => '203.0.113.7',
         ]);
     }
@@ -449,6 +515,7 @@ final class AdaptersTest extends TestCase
     {
         return new ServerRequest('POST', 'https://shop.example.com'.$path, [
             'x-api-key' => TestServer::PUBLIC_KEY,
+            'origin' => 'https://shop.example.com',
             'content-type' => 'application/json',
         ], '{"signals":{}}');
     }
@@ -457,6 +524,7 @@ final class AdaptersTest extends TestCase
     {
         return LaravelRequest::create($path, 'POST', [], [], [], [
             'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'HTTP_ORIGIN' => 'https://shop.example.com',
             'CONTENT_TYPE' => 'application/json',
         ], '{"signals":{}}');
     }
@@ -465,6 +533,7 @@ final class AdaptersTest extends TestCase
     {
         $request = SymfonyRequest::create($path, 'POST', [], [], [], [
             'HTTP_X_API_KEY' => TestServer::PUBLIC_KEY,
+            'HTTP_ORIGIN' => 'https://shop.example.com',
             'CONTENT_TYPE' => 'application/json',
         ], '{"signals":{}}');
 

@@ -6,6 +6,7 @@ namespace Fingerly\Tests;
 
 use Fingerly\ApiException;
 use Fingerly\Client;
+use Fingerly\EventTrigger;
 use Fingerly\Webhook;
 use PHPUnit\Framework\TestCase;
 
@@ -189,6 +190,83 @@ final class ContractTest extends TestCase
         self::assertTrue(Webhook::verify(...$arguments + ['tolerance' => 600]));
     }
 
+    public function testOpenApiRetiresSupplementAndDeferredToken(): void
+    {
+        $openApi = self::json('openapi.json');
+        self::assertIsArray($openApi['paths'] ?? null);
+        self::assertArrayHasKey('/api/v1/ingest', $openApi['paths']);
+        foreach (array_keys($openApi['paths']) as $route) {
+            self::assertStringNotContainsString('supplement', (string) $route);
+        }
+
+        $schemas = $openApi['components']['schemas'] ?? [];
+        self::assertIsArray($schemas);
+        self::assertArrayNotHasKey('SupplementOut', $schemas);
+        $identifyProps = $schemas['IdentifyOut']['properties'] ?? [];
+        self::assertIsArray($identifyProps);
+        self::assertArrayNotHasKey('deferred_token', $identifyProps);
+        $eventProps = $schemas['SDKEventOut']['properties'] ?? [];
+        self::assertIsArray($eventProps);
+        self::assertArrayHasKey('reason', $eventProps);
+    }
+
+    public function testDecodesUnidentifiableEventAndAllV3TriggerSignals(): void
+    {
+        self::assertSame('attestation_downgrade', EventTrigger::SIGNAL_ATTESTATION_DOWNGRADE);
+        self::assertSame('probe_errors', EventTrigger::SIGNAL_PROBE_ERRORS);
+        self::assertSame('fetch_metadata_missing', EventTrigger::SIGNAL_FETCH_METADATA_MISSING);
+        self::assertContains(EventTrigger::SIGNAL_ATTESTATION_DOWNGRADE, EventTrigger::V3_SIGNALS);
+        self::assertContains(EventTrigger::SIGNAL_PROBE_ERRORS, EventTrigger::V3_SIGNALS);
+        self::assertContains(EventTrigger::SIGNAL_FETCH_METADATA_MISSING, EventTrigger::V3_SIGNALS);
+        self::assertSame('web_ticket_missing', EventTrigger::SIGNAL_WEB_TICKET_MISSING);
+        self::assertSame('web_ticket_invalid', EventTrigger::SIGNAL_WEB_TICKET_INVALID);
+        self::assertContains(EventTrigger::SIGNAL_WEB_TICKET_MISSING, EventTrigger::V3_SIGNALS);
+        self::assertContains(EventTrigger::SIGNAL_WEB_TICKET_INVALID, EventTrigger::V3_SIGNALS);
+
+        $triggers = [];
+        foreach (EventTrigger::V3_SIGNALS as $signal) {
+            $triggers[] = [
+                'signal' => $signal,
+                'group' => $signal,
+                'weight' => 15,
+                'confidence' => 'high',
+            ];
+        }
+
+        $this->serve([
+            'status' => 200,
+            'body' => [
+                'request_id' => '0199a963-e400-7000-8000-000000000099',
+                'visitor_id' => '',
+                'occurred_at' => '2026-09-17T12:00:00Z',
+                'state' => 'unavailable',
+                'reason' => 'enrichment_unavailable',
+                'environment' => 'production',
+                'platform' => 'android',
+                'sdk_platform' => 'android',
+                'sdk_version' => '0.3.0',
+                'suspect_score' => 75,
+                'suspect_level' => 'high',
+                'triggers' => $triggers,
+                'has_document' => false,
+            ],
+        ]);
+
+        $event = $this->client()->events->get('0199a963-e400-7000-8000-000000000099');
+
+        self::assertSame('', $event->visitorId);
+        self::assertSame('unavailable', $event->state);
+        self::assertSame('enrichment_unavailable', $event->reason);
+        self::assertSame(
+            EventTrigger::V3_SIGNALS,
+            array_map(static fn (EventTrigger $t): string => $t->signal, $event->triggers),
+        );
+        self::assertSame(
+            EventTrigger::V3_SIGNALS,
+            array_map(static fn (EventTrigger $t): ?string => $t->group, $event->triggers),
+        );
+    }
+
     private static function contractDir(): string
     {
         return dirname(__DIR__).'/contract';
@@ -234,6 +312,6 @@ final class ContractTest extends TestCase
     {
         self::assertNotNull($this->server);
 
-        return new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl()]);
+        return new Client(TestServer::SECRET_KEY, ['endpoint' => $this->server->baseUrl(), 'allow_insecure_loopback' => true]);
     }
 }
