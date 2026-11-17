@@ -14,6 +14,8 @@ final class EventTrigger
     public const SIGNAL_REPORT_INCOMPLETE = 'report_incomplete';
     public const SIGNAL_PROBE_ERRORS = 'probe_errors';
     public const SIGNAL_FETCH_METADATA_MISSING = 'fetch_metadata_missing';
+    public const SIGNAL_WEB_TICKET_MISSING = 'web_ticket_missing';
+    public const SIGNAL_WEB_TICKET_INVALID = 'web_ticket_invalid';
     public const SIGNAL_TAMPERING = 'tampering';
     public const SIGNAL_BROWSER_TAMPERING = 'browser_tampering';
     public const SIGNAL_CUSTOM_ROOT_CA = 'custom_root_ca';
@@ -26,6 +28,8 @@ final class EventTrigger
         self::SIGNAL_REPORT_INCOMPLETE,
         self::SIGNAL_PROBE_ERRORS,
         self::SIGNAL_FETCH_METADATA_MISSING,
+        self::SIGNAL_WEB_TICKET_MISSING,
+        self::SIGNAL_WEB_TICKET_INVALID,
         self::SIGNAL_TAMPERING,
         self::SIGNAL_CUSTOM_ROOT_CA,
         self::SIGNAL_SECONDARY_USER_PROFILE,

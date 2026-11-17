@@ -218,6 +218,10 @@ final class ContractTest extends TestCase
         self::assertContains(EventTrigger::SIGNAL_ATTESTATION_DOWNGRADE, EventTrigger::V3_SIGNALS);
         self::assertContains(EventTrigger::SIGNAL_PROBE_ERRORS, EventTrigger::V3_SIGNALS);
         self::assertContains(EventTrigger::SIGNAL_FETCH_METADATA_MISSING, EventTrigger::V3_SIGNALS);
+        self::assertSame('web_ticket_missing', EventTrigger::SIGNAL_WEB_TICKET_MISSING);
+        self::assertSame('web_ticket_invalid', EventTrigger::SIGNAL_WEB_TICKET_INVALID);
+        self::assertContains(EventTrigger::SIGNAL_WEB_TICKET_MISSING, EventTrigger::V3_SIGNALS);
+        self::assertContains(EventTrigger::SIGNAL_WEB_TICKET_INVALID, EventTrigger::V3_SIGNALS);
 
         $triggers = [];
         foreach (EventTrigger::V3_SIGNALS as $signal) {

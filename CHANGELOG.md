@@ -7,8 +7,9 @@
   `deferred_token`.
 - Added `Event::$reason`, v3 `EventTrigger` anti-spoofing signal constants
   (`attestation_failed`, `attestation_downgrade`, `device_inconsistent`,
-  `report_incomplete`, `probe_errors`, `fetch_metadata_missing`, `tampering`,
-  `custom_root_ca`, `secondary_user_profile`), optional
+  `report_incomplete`, `probe_errors`, `fetch_metadata_missing`,
+  `web_ticket_missing`, `web_ticket_invalid`, `tampering`, `custom_root_ca`,
+  `secondary_user_profile`), optional
   `EventTrigger::$group`, and empty `Event::$visitorId` (`""`) support for
   unidentifiable events.
 - Enforced the v3 first-party proxy relay contract: sanitize-and-restore of
