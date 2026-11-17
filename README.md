@@ -47,7 +47,7 @@ and scores how suspicious it is.
    $fingerly = new \Fingerly\Client(getenv('FINGERLY_SECRET_KEY'));
 
    $event = $fingerly->events->get($requestId);
-   $page = $fingerly->events->list(['level' => 'high', 'limit' => 50]);
+   $page = $fingerly->events->list(['level' => \Fingerly\SuspectLevel::HIGH, 'limit' => 50]);
    ```
 
 4. **Verify a webhook.**
@@ -187,19 +187,40 @@ genuine embedded WebView, or an unmatched high-risk Web payload),
 `$event->visitorId` is `''`; there are no `deferred_token`, `deferred_signals`
 or `supplements` fields in `v: 3`.
 
-`\Fingerly\EventTrigger::V3_SIGNALS` groups the `v: 3` anti-spoofing and
-integrity signal constants on `\Fingerly\EventTrigger`:
-`SIGNAL_ATTESTATION_FAILED` (`'attestation_failed'`),
-`SIGNAL_ATTESTATION_DOWNGRADE` (`'attestation_downgrade'`),
-`SIGNAL_DEVICE_INCONSISTENT` (`'device_inconsistent'`),
-`SIGNAL_REPORT_INCOMPLETE` (`'report_incomplete'`),
-`SIGNAL_PROBE_ERRORS` (`'probe_errors'`),
-`SIGNAL_FETCH_METADATA_MISSING` (`'fetch_metadata_missing'`),
-`SIGNAL_WEB_TICKET_MISSING` (`'web_ticket_missing'`),
-`SIGNAL_WEB_TICKET_INVALID` (`'web_ticket_invalid'`),
-`SIGNAL_TAMPERING` (`'tampering'`),
-`SIGNAL_CUSTOM_ROOT_CA` (`'custom_root_ca'`) and
-`SIGNAL_SECONDARY_USER_PROFILE` (`'secondary_user_profile'`).
+Compare fields against the named constants rather than raw strings. Each is a
+`final class` of `public const` wire strings, so
+`\Fingerly\SuspectLevel::HIGH === $event->suspectLevel` is an ordinary string
+comparison, and every field stays a `string`: a value the server adds later
+arrives unchanged, and is only missing from the class's `ALL` list. They are
+deliberately not backed enums: an enum case is an object, so comparing it with
+`===` to a string field is always false, and `from()` throws on a value this
+release has not heard of.
+
+| Class | Field | Values |
+| --- | --- | --- |
+| `Signal` | `EventTrigger::$signal`, `$group` | every signal group and detector, such as `VPN`, `VPN_PUBLIC` and `FINGERPRINT_SUPPRESSED` |
+| `SuspectLevel` | `Event::$suspectLevel`, webhook `$data['level']` | `LOW`, `MEDIUM`, `HIGH` |
+| `Confidence` | `EventTrigger::$confidence` | `LOW`, `MEDIUM`, `HIGH` |
+| `EventState` | `Event::$state` | `ENRICHED`, `UNAVAILABLE`, and `PENDING`, which a read throws as `isPending()` |
+| `Environment` | `Event::$environment` | `PRODUCTION`, `STAGING`, `DEVELOPMENT` |
+| `Platform` | `Event::$platform` | `WEB`, `ANDROID`, `IOS` |
+| `AnonymityNetwork` | `Event::$anonymityNetwork` | `TOR`, `RELAY`, `VPN`, `PROXY`, `HOSTING` |
+| `DeviceKind` | `Event::$deviceKind` | `DESKTOP`, `MOBILE`, `TABLET`, `SERVER` |
+| `VisitorKind` | `Event::$visitorKind` | `HUMAN`, `AI_BOT`, `AUTOMATION`, `SEARCH_CRAWLER` |
+| `AttestationState` | `$event->document['attestation']['state']` | `ATTESTED`, `NOT_ATTESTED`, `FAILED` |
+| `AttestationStatus` | `$event->document['attestation']['status']` | `VERIFIED`, `INDETERMINATE`, `INVALID`, `ABSENT`, `UNCONFIGURED` |
+| `AttestSkippedReason` | `$event->document['attestation']['attest_skipped']` | `NOT_OFFERED`, `UNSUPPORTED`, `CHALLENGE_UNAVAILABLE`, `KEY_ERROR`, `TIMEOUT`, `BACKOFF`, `INSTALL_UNAVAILABLE` |
+| `VerifyReason` | `EventVerification::$reason` | `OK` (`''`) and the failures in [Verify a backend action](#verify-a-backend-action) |
+| `WebhookEventType` | `WebhookEvent::$type` | see [Verify webhooks](#verify-webhooks) |
+| `WebhookEnvironment` | `WebhookEvent::$environment` | `LIVE`, `TEST` |
+
+All live in the `Fingerly` namespace. A constant's name is its value
+upper-cased, with `.` as `_` (`VerifyReason::OK` is `''`). Event reads report
+each trigger under its signal group (`Signal::VPN`), while `visitor.suspect`
+webhooks and the archived document's `risk.triggers` carry the detector
+(`Signal::VPN_PUBLIC`) with its group beside it. The `SIGNAL_*` constants on
+`EventTrigger`, its `V3_SIGNALS` list and the `REASON_*` constants on
+`EventVerification` are the same strings.
 
 `Event::$projectId` names the Fingerly project the event belongs to, as a UUID
 string. It is `null` when the server is older than projects.
@@ -212,7 +233,7 @@ visitor identifiers supplied by the browser.
 
 `$fingerly->events->verify()` reads the event and runs these checks in order,
 stopping at the first that fails. `$result->reason` names it, as one of the
-`\Fingerly\EventVerification::REASON_*` constants:
+`\Fingerly\VerifyReason` constants:
 
 1. `not_found`: there is no such event. `$result->event` is null only here.
 2. `too_old`: it happened more than `max_age_seconds` ago (300 by default), or
@@ -240,11 +261,11 @@ if (!$result->ok) {
     return 'refuse'; // $result->reason says why
 }
 $event = $result->event;
-if ('high' === $event->suspectLevel) {
+if (\Fingerly\SuspectLevel::HIGH === $event->suspectLevel) {
     return 'review';
 }
 foreach ($event->triggers as $trigger) {
-    if (\Fingerly\EventTrigger::SIGNAL_ATTESTATION_FAILED === $trigger->signal) {
+    if (\Fingerly\Signal::ATTESTATION_FAILED === $trigger->signal) {
         return 'refuse';
     }
 }
@@ -392,7 +413,23 @@ before decoding them: re-serialising them changes the digest.
 | Bad payload | `Webhook::parse()` throws `WebhookException`, which names the field at fault and never its value |
 
 `Webhook::parse()` decodes the envelope every delivery shares and leaves `$data`
-an array, so a new event type needs no upgrade. `identification.completed` and
+an array, so a new event type needs no upgrade. Dispatch on `$event->type` with
+`\Fingerly\WebhookEventType`:
+
+```php
+use Fingerly\WebhookEventType;
+
+match ($event->type) {
+    WebhookEventType::VISITOR_SUSPECT => ReviewVisitor::dispatch($event->data['request_id']), // high level only
+    WebhookEventType::IDENTIFICATION_COMPLETED,
+    WebhookEventType::IDENTIFICATION_REFUSED => RecordIdentification::dispatch($event->id),
+    WebhookEventType::WEBHOOK_TEST => null, // sent to one endpoint on request; nobody subscribes to it
+    default => null, // BILLING_STATUS_CHANGED, USAGE_DAILY_SETTLED, or a type added later
+};
+```
+
+The other types are `BILLING_STATUS_CHANGED` (`billing.status_changed`) and
+`USAGE_DAILY_SETTLED` (`usage.daily_settled`). `identification.completed` and
 `visitor.suspect` carry `$data['project_id']`; `identification.refused` carries
 it only when the refused request named a known key.
 
@@ -712,7 +749,9 @@ and throwing `EventAlreadyConsumedException.php`, and `DeviceCheck.php`
 the DeviceCheck reads and writes, decoding into `DeviceCheckBits.php` and
 `DeviceCheckWrite.php`;
 `Event.php`, `EventPage.php`, `EventTrigger.php` and
-`WebhookEvent.php` are what they decode into, and `Json.php` reads those
+`WebhookEvent.php` are what they decode into, and `Signal.php`,
+`SuspectLevel.php` and the other constant classes name the closed string sets
+their fields hold. `Json.php` reads those
 bodies without trusting their shape. `Webhook.php` verifies signatures and
 needs nothing else in the package; `WebhookException.php` is what `parse()`
 throws for a payload it cannot read. `Proxy.php` is the same-origin core, with
