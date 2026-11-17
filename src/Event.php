@@ -26,7 +26,7 @@ final class Event
      * @param string                    $sdkPlatform      what the SDK called itself
      * @param string                    $sdkVersion       the SDK build that submitted the identification
      * @param null|int                  $suspectScore     null when the request was not scored; never read null as 0
-     * @param null|string               $suspectLevel     `low`, `medium` or `high`; null when not scored
+     * @param null|string               $suspectLevel     `low`, `medium` or `high` ({@see SuspectLevel}); null when not scored
      * @param list<EventTrigger>        $triggers         never null from the API: an event about which nothing fired
      *                                                    carries an empty list
      * @param bool                      $hasDocument      whether the full submission was archived
@@ -41,13 +41,13 @@ final class Event
      * @param null|string               $countryName      the country's name, as the geolocation database spells it
      * @param null|string               $asn              the autonomous system announcing the address
      * @param null|string               $asnName          that network's name, such as a carrier or a hosting provider
-     * @param null|string               $anonymityNetwork `tor`, `vpn`, `proxy` or `hosting`; null on an ordinary
+     * @param null|string               $anonymityNetwork `tor`, `relay`, `vpn`, `proxy` or `hosting`; null on an ordinary
      *                                                    consumer connection, which is most of them
      * @param null|string               $agent            the browser or app family, such as `chrome`
      * @param null|string               $agentVersion     its major version, as far as the agent admits to one
      * @param null|string               $os               the operating system family
      * @param null|string               $deviceKind       `desktop`, `mobile`, `tablet` or similar
-     * @param null|string               $visitorKind      what the visitor appears to be, such as `human` or `bot`
+     * @param null|string               $visitorKind      what the visitor appears to be, such as `human` or `automation`
      * @param null|array<string, mixed> $document         an allow-listed view of the archived submission: schema,
      *                                                    request id, time, SDK platform and version, IP network,
      *                                                    the classified IP (network, city-level location,
