@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0
+
+- Added named constants for the closed string sets the API sends, each a
+  `final class` of `public const` wire strings with an `ALL` list:
+  `Signal` (every signal group and detector), `SuspectLevel`, `Confidence`,
+  `EventState`, `Environment`, `Platform`, `AnonymityNetwork`, `DeviceKind`,
+  `VisitorKind`, `AttestationState`, `AttestationStatus`,
+  `AttestSkippedReason`, `VerifyReason`, `WebhookEventType` and
+  `WebhookEnvironment`. Fields stay strings, so
+  `SuspectLevel::HIGH === $event->suspectLevel` is a plain comparison and a
+  value added later still arrives. The `EventTrigger::SIGNAL_*` and
+  `EventVerification::REASON_*` constants now refer to the same strings.
+- `Event::$anonymityNetwork` documents `relay`, and `Event::$visitorKind`
+  no longer names a `bot` value the server never sends.
+
 ## 0.3.0
 
 - Synced the v3 single-call ingest contract snapshot (`openapi.json` and
