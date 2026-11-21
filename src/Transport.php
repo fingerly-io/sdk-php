@@ -105,6 +105,8 @@ final class Transport
     public function apiException(int $status, string $body, array $headers = []): ApiException
     {
         $retryAfter = self::retryAfter($headers['retry-after'] ?? null);
+        $scope = $headers['fingerly-ratelimit-scope'] ?? '';
+        $scope = 1 === preg_match('/\A[a-z0-9_-]{1,32}\z/', $scope) ? $scope : null;
         $headerRequestId = isset($headers['x-request-id']) && '' !== $headers['x-request-id']
             ? $this->redact($headers['x-request-id'])
             : null;
@@ -113,7 +115,7 @@ final class Transport
         if (!is_array($decoded)) {
             // A non-JSON or truncated body still reports its HTTP status, and
             // its contents are deliberately dropped rather than surfaced.
-            return new ApiException($status, null, null, $headerRequestId, $retryAfter);
+            return new ApiException($status, null, null, $headerRequestId, $retryAfter, $scope);
         }
 
         $error = is_array($decoded['error'] ?? null) ? $decoded['error'] : [];
@@ -127,7 +129,7 @@ final class Transport
             $details = is_string($encoded) ? json_decode($this->redact($encoded), true) : null;
         }
 
-        return new ApiException($status, $code, $details, $requestId, $retryAfter);
+        return new ApiException($status, $code, $details, $requestId, $retryAfter, $scope);
     }
 
     /**
@@ -226,13 +228,17 @@ final class Transport
         $errno = curl_errno($handle);
         $error = curl_error($handle);
         $status = (int) curl_getinfo($handle, \CURLINFO_RESPONSE_CODE);
+        // How much of the request went out. Non-zero once its first bytes
+        // were written, so a deadline that elapses after that may have let the
+        // server act on it.
+        $sent = (int) curl_getinfo($handle, \CURLINFO_REQUEST_SIZE) > 0;
         // Drop the per-request options (headers, body, the header callback and
         // the variables it closes over) so nothing of this request survives
         // into the next; curl_reset() keeps the connection cache.
         curl_reset($handle);
 
         if (\CURLE_OPERATION_TIMEDOUT === $errno) {
-            throw new TimeoutException();
+            throw new TimeoutException(null, $sent);
         }
         if ($tooLarge || \CURLE_FILESIZE_EXCEEDED === $errno) {
             throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20), 'too_large');

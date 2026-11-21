@@ -39,6 +39,9 @@ final class Client
     /** Reads and writes the Apple DeviceCheck bits behind an iOS event. */
     public readonly DeviceCheck $deviceCheck;
 
+    /** Reports the requests your server served; {@see AgentSightings} builds on it. */
+    public readonly Agents $agents;
+
     /**
      * @param string               $secretKey a server-only key, `fly_sk_{environment}_…`, whose prefix
      *                                        names the environment read
@@ -85,5 +88,6 @@ final class Client
         );
         $this->events = new Events($transport, $origin.'/api/'.$apiVersion, $secret);
         $this->deviceCheck = new DeviceCheck($transport, $origin.'/api/'.$apiVersion, $secret);
+        $this->agents = new Agents($transport, $origin.'/api/'.$apiVersion, $secret);
     }
 }
