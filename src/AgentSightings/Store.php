@@ -20,6 +20,9 @@ interface Store
     /** The most pending items held. */
     public const MAX_PENDING = 1000;
 
+    /** The longest an answer is remembered, whatever its ttl, in seconds. */
+    public const MAX_TTL = 86400;
+
     /** The remembered answer for a key, when present and unexpired. */
     public function lookup(string $key, float $now): ?AgentSighting;
 

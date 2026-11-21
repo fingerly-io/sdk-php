@@ -49,7 +49,8 @@ final class Sighting
      * Builds the sighting, or null when the request cannot be reported: a
      * user agent over the limit, or no single client address.
      *
-     * A Web Bot Auth header over the limit counts as absent before anything
+     * A Web Bot Auth header that is empty, only whitespace or over the limit
+     * counts as absent before anything
      * else is decided, so the key and `signed` are computed from what is sent.
      * `Host` is sent as received, whatever its length, or left out when empty.
      */
@@ -156,9 +157,9 @@ final class Sighting
         );
     }
 
-    /** A header as sent: absent when empty or over the limit. */
+    /** A header as sent: absent when empty, only whitespace, or over the limit. */
     private static function header(string $value): ?string
     {
-        return '' === $value || strlen($value) > self::MAX_HEADER_BYTES ? null : $value;
+        return '' === trim($value) || strlen($value) > self::MAX_HEADER_BYTES ? null : $value;
     }
 }

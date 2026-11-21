@@ -41,6 +41,9 @@ final class AgentSightingsTest extends TestCase
     /** @var list<\Closure(): void> */
     private array $deferred = [];
 
+    /** @var null|resource the process behind {@see self::startRawServer()} */
+    private mixed $rawServer = null;
+
     protected function setUp(): void
     {
         AgentSightings::resetLogs();
@@ -50,6 +53,11 @@ final class AgentSightingsTest extends TestCase
     {
         $this->server?->stop();
         $this->server = null;
+        if (is_resource($this->rawServer)) {
+            proc_terminate($this->rawServer);
+            proc_close($this->rawServer);
+        }
+        $this->rawServer = null;
     }
 
     #[DataProvider('stores')]
@@ -172,6 +180,21 @@ final class AgentSightingsTest extends TestCase
         $sightings->flush();
 
         self::assertTrue($sightings->lookup($request)->isUnknown());
+    }
+
+    #[DataProvider('stores')]
+    public function testATtlIsHeldToADay(string $store): void
+    {
+        $this->serve([$this->answer('r1', [[864000, VisitorKind::HUMAN]])]);
+        $sightings = $this->sightings($store);
+        $request = self::request(self::BROWSER, '203.0.113.7');
+        $sightings->report($request, 'text/html');
+        $sightings->flush();
+
+        $this->now += 86399;
+        self::assertSame(VisitorKind::HUMAN, $sightings->lookup($request)->visitorKind);
+        ++$this->now;
+        self::assertTrue($sightings->lookup($request)->isUnknown(), 'remembered for 86400 seconds at most');
     }
 
     #[DataProvider('stores')]
@@ -472,6 +495,61 @@ final class AgentSightingsTest extends TestCase
     }
 
     #[DataProvider('stores')]
+    public function testARetryAfterOfZeroPausesASecond(string $store): void
+    {
+        foreach (['0', 'Thu, 01 Jan 1970 00:00:00 GMT'] as $retryAfter) {
+            $this->serve([
+                ['status' => 429, 'body' => '', 'headers' => ['retry-after' => $retryAfter]],
+                $this->answer('r1', [[60, VisitorKind::HUMAN]]),
+            ]);
+            $sightings = $this->sightings($store);
+            $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+            $sightings->flush();
+            $this->now += 0.9;
+            $sightings->flush();
+            self::assertSame(1, $this->server()->requestCount(), $retryAfter.' pauses at least a second');
+            $this->now += 0.1;
+            $sightings->flush();
+            self::assertSame(2, $this->server()->requestCount(), $retryAfter);
+        }
+    }
+
+    #[DataProvider('stores')]
+    public function testAnUnreadableRetryAfterCountsAsNone(string $store): void
+    {
+        foreach (['-5', 'soon', '1.5'] as $retryAfter) {
+            $this->serve([
+                ['status' => 429, 'body' => '', 'headers' => ['retry-after' => $retryAfter]],
+                $this->answer('r1', [[60, VisitorKind::HUMAN]]),
+            ]);
+            $sightings = $this->sightings($store);
+            $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+            $sightings->flush();
+            $this->now += 59;
+            $sightings->flush();
+            self::assertSame(1, $this->server()->requestCount(), $retryAfter.' waits a minute, as when missing');
+            ++$this->now;
+            $sightings->flush();
+            self::assertSame(2, $this->server()->requestCount(), $retryAfter);
+        }
+
+        $this->wall = 86400 * 20000 + 3600;
+        $this->serve([
+            ['status' => 429, 'body' => '', 'headers' => ['retry-after' => 'soon', 'fingerly-ratelimit-scope' => 'daily']],
+            $this->answer('r1', [[60, VisitorKind::HUMAN]]),
+        ]);
+        $sightings = $this->sightings($store);
+        $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+        $sightings->flush();
+        $this->now += 82799;
+        $sightings->flush();
+        self::assertSame(1, $this->server()->requestCount(), 'the daily allowance waits for the next UTC day');
+        ++$this->now;
+        $sightings->flush();
+        self::assertSame(2, $this->server()->requestCount());
+    }
+
+    #[DataProvider('stores')]
     public function testARefusedKeyDropsTheBatchAndPausesAMinute(string $store): void
     {
         foreach ([401, 403] as $status) {
@@ -638,6 +716,37 @@ final class AgentSightingsTest extends TestCase
         self::assertCount(1, $this->logsMatching('timed out'));
     }
 
+    /**
+     * Closed with no answer, reset, or a body cut short, each once the whole
+     * report was read: the API may have counted it.
+     */
+    #[DataProvider('lostConnections')]
+    public function testAConnectionLostAfterSendingDropsTheBatch(string $mode): void
+    {
+        if ('reset' === $mode && !\function_exists('socket_import_stream')) {
+            self::markTestSkipped('resetting a connection needs ext-sockets');
+        }
+        $backing = new MemoryStore(4096);
+        $sightings = $this->sightings('memory', 4096, $backing, $this->startRawServer($mode));
+        $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+        $sightings->flush();
+        self::assertSame(0, $backing->pending()['items'], $mode.': the batch is not kept');
+        self::assertSame(0.0, $backing->state()['resume_at'], $mode.': no backoff');
+        self::assertCount(1, $this->logsMatching('connection failed after a report was sent'));
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function lostConnections(): iterable
+    {
+        yield 'closed' => ['close'];
+
+        yield 'reset' => ['reset'];
+
+        yield 'cut short' => ['short'];
+    }
+
     #[DataProvider('stores')]
     public function testAnAnswerOfTheWrongLengthDropsTheBatch(string $store): void
     {
@@ -785,6 +894,27 @@ final class AgentSightingsTest extends TestCase
         $items = $this->sentItems(0);
         self::assertSame([['user_agent' => 'a', 'client_ip' => '198.51.100.1', 'host' => $long, 'method' => 'GET', 'signature_input' => 'sig1=()', 'count' => 1]], $items);
         self::assertTrue($sightings->lookup($tooLong)->isUnknown());
+    }
+
+    #[DataProvider('stores')]
+    public function testBlankSignatureHeadersAreAbsent(string $store): void
+    {
+        $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN]])]);
+        $sightings = $this->sightings($store);
+        $blank = self::request('a', '198.51.100.1', '/', [
+            'signature' => ' ',
+            'signature-input' => "\t",
+            'signature-agent' => '  ',
+        ]);
+        $bare = self::request('a', '198.51.100.1');
+        $sightings->report($blank, 'text/html');
+        $sightings->report($bare, 'text/html');
+        $sightings->flush();
+
+        // Left out of the item, unsigned and keyed as if never sent, so both
+        // fold into one item and share one answer.
+        self::assertSame([['user_agent' => 'a', 'client_ip' => '198.51.100.1', 'host' => 'example.com', 'method' => 'GET', 'count' => 2]], $this->sentItems(0));
+        self::assertSame(VisitorKind::HUMAN, $sightings->lookup($blank)->visitorKind);
     }
 
     #[DataProvider('stores')]
@@ -1083,6 +1213,57 @@ final class AgentSightingsTest extends TestCase
     private function logsMatching(string $needle): array
     {
         return array_values(array_filter($this->logs, static fn (string $line): bool => str_contains($line, $needle)));
+    }
+
+    /**
+     * A server that reads one whole request and then fails it: `close` closes
+     * with no answer, `reset` resets the connection, `short` answers a body
+     * shorter than its Content-Length and closes.
+     */
+    private function startRawServer(string $mode): string
+    {
+        $port = self::closedPort();
+        $code = <<<'PHP'
+            $server = stream_socket_server('tcp://127.0.0.1:'.$argv[1], $errno, $error);
+            $mode = $argv[2];
+            while ($client = @stream_socket_accept($server, 30)) {
+                $request = '';
+                while (!str_contains($request, "\r\n\r\n") && false !== ($chunk = fread($client, 8192)) && '' !== $chunk) {
+                    $request .= $chunk;
+                }
+                if (!str_contains($request, "\r\n\r\n")) {
+                    // The readiness probe, which sends nothing.
+                    fclose($client);
+                    continue;
+                }
+                if (preg_match('/content-length:\s*(\d+)/i', $request, $m)) {
+                    $body = substr($request, strpos($request, "\r\n\r\n") + 4);
+                    while (strlen($body) < (int) $m[1] && false !== ($chunk = fread($client, 8192)) && '' !== $chunk) {
+                        $body .= $chunk;
+                    }
+                }
+                if ('short' === $mode) {
+                    fwrite($client, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n{\"rules_version\"");
+                } elseif ('reset' === $mode) {
+                    socket_set_option(socket_import_stream($client), SOL_SOCKET, SO_LINGER, ['l_onoff' => 1, 'l_linger' => 0]);
+                }
+                fclose($client);
+            }
+            PHP;
+        $process = proc_open([\PHP_BINARY, '-r', $code, (string) $port, $mode], [], $pipes);
+        self::assertIsResource($process);
+        $this->rawServer = $process;
+
+        for ($attempt = 0; $attempt < 200; ++$attempt) {
+            $probe = @fsockopen('127.0.0.1', $port, $errno, $error, 0.1);
+            if (is_resource($probe)) {
+                fclose($probe);
+
+                return 'http://127.0.0.1:'.$port;
+            }
+            usleep(25_000);
+        }
+        self::fail('the raw server never started listening');
     }
 
     private static function closedPort(): int

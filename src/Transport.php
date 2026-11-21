@@ -232,6 +232,9 @@ final class Transport
         // were written, so a deadline that elapses after that may have let the
         // server act on it.
         $sent = (int) curl_getinfo($handle, \CURLINFO_REQUEST_SIZE) > 0;
+        // Whether all of it went out, body included, so a connection lost
+        // after that may have let the server act on it.
+        $written = $sent && (int) curl_getinfo($handle, \CURLINFO_SIZE_UPLOAD_T) >= strlen($body ?? '');
         // Drop the per-request options (headers, body, the header callback and
         // the variables it closes over) so nothing of this request survives
         // into the next; curl_reset() keeps the connection cache.
@@ -244,7 +247,7 @@ final class Transport
             throw new ConnectionException(sprintf('fingerly: the response body is over %d MiB', self::MAX_RESPONSE_BODY >> 20), 'too_large');
         }
         if (0 !== $errno || false === $response) {
-            throw new ConnectionException('fingerly: request failed: '.$this->redact($error), self::curlKind($errno));
+            throw new ConnectionException('fingerly: request failed: '.$this->redact($error), self::curlKind($errno), $written);
         }
 
         /** @var array<string, string> $received */

@@ -60,7 +60,7 @@ final class MemoryStore implements Store
         $this->rulesVersion = $rulesVersion;
         foreach ($answers as [$key, $answer]) {
             unset($this->cache[$key]);
-            $this->cache[$key] = [$answer, $now + $answer->ttl];
+            $this->cache[$key] = [$answer, $now + min($answer->ttl, self::MAX_TTL)];
         }
         while (count($this->cache) > $this->capacity) {
             unset($this->cache[array_key_first($this->cache)]);

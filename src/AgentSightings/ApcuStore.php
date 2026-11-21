@@ -73,7 +73,7 @@ final class ApcuStore implements Store
         }
         $this->apcu->store($this->prefix.'rv', $rulesVersion);
         foreach ($answers as [$key, $answer]) {
-            $this->put($key, $answer, $now + $answer->ttl, $now);
+            $this->put($key, $answer, $now + min($answer->ttl, self::MAX_TTL), $now);
         }
     }
 

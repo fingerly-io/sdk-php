@@ -81,6 +81,9 @@ final class AgentSightings
     /** How long a 429 without a usable Retry-After stops flushing, in seconds. */
     private const RATE_LIMIT_PAUSE = 60.0;
 
+    /** The shortest a 429 stops flushing, whatever its Retry-After, in seconds. */
+    private const MIN_RATE_LIMIT_PAUSE = 1.0;
+
     /** How long an explicit flush waits for one already in flight, in seconds. */
     private const WAIT_FOR_FLIGHT = self::DEADLINE + 1.0;
 
@@ -598,6 +601,11 @@ final class AgentSightings
                 // The API answered, with more than any answer could be.
                 $store->settle($items);
                 $this->logThrottled($store, 'invalid_logged_at', 'the API answered a report with an oversized body; the batch was dropped');
+            } elseif ($e->requestWritten) {
+                // Closed, reset or cut short once the report was written: the
+                // API may have counted it, as after a timeout.
+                $store->settle($items);
+                $this->logThrottled($store, 'invalid_logged_at', 'the connection failed after a report was sent; the batch was dropped');
             } else {
                 $store->putBack($items);
                 $this->backOff($store);
@@ -627,12 +635,16 @@ final class AgentSightings
         return true;
     }
 
-    /** Seconds a 429 pauses sending: Retry-After, else the next UTC day for the daily allowance, else a minute. */
+    /**
+     * Seconds a 429 pauses sending: Retry-After, never under a second, else
+     * the next UTC day for the daily allowance, else a minute. An unreadable
+     * Retry-After counts as none.
+     */
     private function rateLimitPause(ApiException $e): float
     {
         $retryAfter = $e->getRetryAfter();
         if (null !== $retryAfter) {
-            return (float) $retryAfter;
+            return max(self::MIN_RATE_LIMIT_PAUSE, (float) $retryAfter);
         }
         if (ApiException::RATE_LIMIT_SCOPE_DAILY === $e->getRateLimitScope()) {
             return (float) (86400 - (($this->wallClock)() % 86400));
