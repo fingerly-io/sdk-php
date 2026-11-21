@@ -807,7 +807,9 @@ Each adapter also has `lookup($request)` for its own request type. The `ai`
 object is the one events carry, with the same `AiPurpose`, `AiRuntime`,
 `AiVerificationMethod` and `AiVerificationResult` constants. An agent's name
 comes from what it sent, and `ai->verification` says how far that claim was
-checked: read it as a label, not as proof. A signed request (Web Bot Auth) is
+checked: `PASS` means the operator's key or published ranges confirmed it,
+`FAIL` means the name was borrowed, and `NOT_ATTEMPTED` leaves it the
+client's claim. A signed request (Web Bot Auth) is
 checked every time and never remembered, so `lookup()` answers unknown for it.
 
 ### What is reported
