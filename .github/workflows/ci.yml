@@ -20,7 +20,11 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: curl, json, mbstring
+          # pcntl stops the test server, sockets drives the connection-reset
+          # case, and apcu runs the agent sightings tests on the real store
+          # as well as the fake one.
+          extensions: curl, json, mbstring, pcntl, sockets, apcu
+          ini-values: apc.enable_cli=1
           coverage: none
       - uses: ramsey/composer-install@v3
       - run: composer validate --strict
