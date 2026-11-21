@@ -24,7 +24,8 @@
 `fingerly/fingerly-php` is the server-side SDK for PHP. It reads Fingerly events
 with a secret key, verifies webhook signatures and relays the browser SDK's
 traffic through your own domain with a same-origin proxy, with adapters for
-Laravel, Symfony and PSR-15. It needs nothing outside `ext-curl` and `ext-json`
+Laravel, Symfony and PSR-15. It also reports the pages your server served, so
+AI crawlers that never run JavaScript are seen too. It needs nothing outside `ext-curl` and `ext-json`
 and is for backends that protect signups, logins and payments from fraud and
 abuse. [Fingerly](https://fingerly.io) identifies the device behind each session
 and scores how suspicious it is.
@@ -76,8 +77,9 @@ Full guide: [docs.fingerly.io/docs/sdks/php](https://docs.fingerly.io/docs/sdks/
 | Read or write an iOS device's Apple DeviceCheck bits | `deviceCheck->query` / `deviceCheck->write` | [Apple DeviceCheck bits](#apple-devicecheck-bits) |
 | Check a webhook delivery is genuine | `\Fingerly\Webhook::verify` and `::parse` | [Verify webhooks](#verify-webhooks) |
 | Keep the browser SDK first-party, away from content blockers | `\Fingerly\Proxy` with a Laravel, Symfony or PSR-15 adapter | [First-party proxy](#first-party-proxy-same-origin) |
+| See AI crawlers that never run JavaScript, and know which requests they sent | `\Fingerly\AgentSightings` with a Laravel, Symfony or PSR-15 adapter | [AI crawlers on your server](#ai-crawlers-on-your-server) |
 
-On this page: [Dependencies](#no-dependencies) · [Read events](#read-events) · [DeviceCheck bits](#apple-devicecheck-bits) · [Verify webhooks](#verify-webhooks) · [First-party proxy](#first-party-proxy-same-origin) · [Requirements](#requirements) · [Development](#development-and-release-preparation) · [Documentation](#documentation) · [Help](#help) · [Licence](#licence)
+On this page: [Dependencies](#no-dependencies) · [Read events](#read-events) · [DeviceCheck bits](#apple-devicecheck-bits) · [Verify webhooks](#verify-webhooks) · [First-party proxy](#first-party-proxy-same-origin) · [AI crawlers](#ai-crawlers-on-your-server) · [Requirements](#requirements) · [Development](#development-and-release-preparation) · [Documentation](#documentation) · [Help](#help) · [Licence](#licence)
 
 ## No dependencies
 
@@ -91,9 +93,10 @@ Everything else is a `suggest`, pulled in only if you use it:
 | Package | Use it to |
 | --- | --- |
 | `psr/http-client` | route event reads through your own HTTP stack |
-| `psr/http-server-middleware` | mount the proxy as PSR-15 middleware |
-| `illuminate/http` | mount the proxy as Laravel middleware |
-| `symfony/http-kernel` | mount the proxy as a Symfony kernel listener |
+| `psr/http-server-middleware` | mount the proxy or agent sightings as PSR-15 middleware |
+| `illuminate/http` | mount the proxy or agent sightings as Laravel middleware |
+| `symfony/http-kernel` | mount the proxy or agent sightings as a Symfony kernel listener |
+| `ext-apcu` | share the agent sightings cache and buffer between PHP-FPM workers |
 
 A supplied client takes a PSR-17 `request_factory`, plus a `stream_factory`
 wherever a body is sent. With Guzzle (`composer require guzzlehttp/guzzle`),
@@ -726,6 +729,137 @@ host, the URL or a key:
 'on_error' => fn (string $line) => \Illuminate\Support\Facades\Log::warning($line),
 ```
 
+## AI crawlers on your server
+
+Most AI crawlers and fetchers (GPTBot, ClaudeBot and the like) read your pages
+without running any JavaScript, so the browser SDK never sees them.
+`\Fingerly\AgentSightings` reports the requests your server served to
+Fingerly, which answers what sent each one, and remembers those answers so
+your code can ask about a request without waiting on the network. The console
+counts the traffic either way.
+
+The SDK decides nothing about the visitor. It never classifies a user agent,
+never checks an address against a list and never filters by what a visitor
+claims to be: Fingerly decides, and the SDK forwards raw input and remembers
+the answer. What it does choose is which of your own responses are worth
+reporting.
+
+```php
+$sightings = new \Fingerly\AgentSightings([
+    'secret_key' => getenv('FINGERLY_SECRET_KEY'),
+    // The same trusted source as the proxy's client_ip, never X-Forwarded-For.
+    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: $r->remoteAddress,
+]);
+```
+
+Build it once per process and share it, then mount the adapter for your
+framework. Each one reports after your application answered and hands the
+response back untouched:
+
+```php
+// Laravel: bind it as a singleton in a service provider, then in bootstrap/app.php
+$middleware->append(\Fingerly\AgentSightings\LaravelMiddleware::class);
+
+// Slim, Mezzio and other PSR-15 stacks
+$app->add(new \Fingerly\AgentSightings\Psr15Middleware($sightings));
+```
+
+```yaml
+# Symfony, config/services.yaml
+Fingerly\AgentSightings\SymfonyListener:
+    arguments: ['@fingerly.agent_sightings']
+```
+
+Laravel reports from its `terminate()` hook and Symfony on `kernel.terminate`,
+both after the response was sent. A framework with none of these calls
+`$sightings->report($request, $contentType)` once per response, with a
+`ProxyRequest` such as `ProxyRequest::fromGlobals()`.
+
+### Ask about a request
+
+`lookup()` answers from memory only. It never waits on the network and never
+throws. Until Fingerly has answered for the same user agent, address and
+`Signature-Agent`, and again once that answer's `ttl` has passed, it returns
+`AgentSighting::unknown()`, whose `visitorKind` is `AgentSighting::UNKNOWN`:
+serve such a request as usual.
+
+```php
+use Fingerly\AgentSighting;
+use Fingerly\AiPurpose;
+use Fingerly\VisitorKind;
+
+$answer = $sightings->lookup(\Fingerly\AgentSightings\LaravelMiddleware::toProxyRequest($request));
+
+if (AgentSighting::UNKNOWN === $answer->visitorKind) {
+    // Not answered yet: serve as usual.
+} elseif (VisitorKind::AI_BOT === $answer->visitorKind && AiPurpose::TRAINING === $answer->ai?->purpose) {
+    // Fingerly said an AI training crawler sent this request ($answer->ai->provider, $answer->agent).
+}
+```
+
+Each adapter also has `lookup($request)` for its own request type. The `ai`
+object is the one events carry, with the same `AiPurpose`, `AiRuntime`,
+`AiVerificationMethod` and `AiVerificationResult` constants. An agent's name
+comes from what it sent, and `ai->verification` says how far that claim was
+checked: read it as a label, not as proof. A signed request (Web Bot Auth) is
+checked every time and never remembered, so `lookup()` answers unknown for it.
+
+### What is reported
+
+By default, every response with a `Content-Type` of `text/html` or
+`application/xhtml+xml`, and every request for `/robots.txt`, `/llms.txt` and
+`/llms-full.txt`, whatever their status. Static assets, API routes and health
+checks are not. Paths are the application-relative path the proxy also
+matches, without the query string.
+
+| Option | Effect |
+| --- | --- |
+| `content_types` | The response media types reported, replacing the default list; parameters such as `charset` are ignored. |
+| `include_path_prefixes` | Paths reported whatever their content type. |
+| `exclude_path_prefixes` | Paths never reported, `/robots.txt` and the other two included; an exclusion wins. |
+
+For each reported request, exactly these are sent: the `User-Agent` as
+received, the client address from your `client_ip` callback, `Host`, the
+method, and the Web Bot Auth `Signature`, `Signature-Input` and
+`Signature-Agent` headers when present, plus a count. Never the path, the
+query string, cookies, `Authorization`, any other header, the body or the
+response, and the SDK logs none of them. A request whose `User-Agent` is over
+4096 bytes, or whose `client_ip` callback gives no single address, is not
+reported; a Web Bot Auth header over 4096 bytes is left out.
+
+### Memory and sending
+
+| | |
+| --- | --- |
+| Answers remembered | 4096 by default (`capacity`, at most 65536), least recently used dropped first, each for the `ttl` Fingerly gave. About 1.5 MB at the default, about 25 MB at the most. When Fingerly's rules change, every remembered answer is dropped. |
+| Pending reports | At most 1000. Repeats of the same request are one report with a count, cache hits included, so the console counts them; signed requests are never folded. When the buffer is full, a new request is not reported and `droppedCount()` goes up. |
+| Sending | Up to 200 reports per call, when 200 or 64 KiB are pending or 2 seconds after the oldest, at most one call at a time, each with a 5 second deadline. Never on the request being served. |
+| Failures | Requests are served as usual and `lookup()` keeps answering. A rate limit keeps the reports until `Retry-After` has passed; a wrong or revoked key drops them and pauses sending for a minute; a server or network error keeps them and retries with backoff from 1 to 60 seconds; a call that timed out after it was sent is dropped rather than counted twice. |
+
+Under **PHP-FPM** the cache and the pending reports live in APCu, shared by
+the pool's workers and held to the same bounds. The request that makes a send
+due registers it to run after `fastcgi_finish_request()` (or LiteSpeed's
+equivalent), and one worker at a time sends, under an `apcu_add` lock. Without
+APCu, and without `long_running`, nothing is reported, every `lookup()` answers
+unknown, and that is logged once. APCu is approximate about recency: an answer
+in use is kept by storing it again, rather than by an exact LRU.
+
+On a **long-running server** (Octane, RoadRunner, Swoole, FrankenPHP worker
+mode, a queue worker) pass `'long_running' => true`: both live in the process,
+and the Laravel and Symfony adapters send due reports from their terminate
+hooks. Elsewhere, call `$sightings->flushIfDue()` after each response is
+written, for example after RoadRunner's `respond()`. A PHP process has no
+timer, so the 2 second rule is checked when the next response is reported.
+
+`$sightings->flush()` sends everything pending now, for a script or a worker
+that is about to exit, and `$sightings->close()` flushes once more and stops
+reporting. Neither throws. Log lines go to `on_error` when given, otherwise
+to `error_log()`.
+
+The low-level call is `$fingerly->agents->reportSightings([...])` on the
+`Client`, taking `AgentSightingReport` items and returning the answers in the
+same order, for a setup that cannot use `AgentSightings`.
+
 ## Requirements
 
 - PHP 8.2 or newer, and nothing outside `ext-curl` and `ext-json`.
@@ -777,6 +911,10 @@ bodies without trusting their shape. `Webhook.php` verifies signatures and
 needs nothing else in the package; `WebhookException.php` is what `parse()`
 throws for a payload it cannot read. `Proxy.php` is the same-origin core, with
 `Proxy/` holding its request and response types and the three adapters.
+`Agents.php` is the low-level sightings call, decoding into
+`AgentSightingsAnswer.php` and `AgentSighting.php`; `AgentSightings.php`
+batches, remembers and flushes, with `AgentSightings/` holding the cache key
+(`Sighting.php`), the in-memory and APCu stores and its three adapters.
 `Config.php` validates every caller-supplied option: keys, origins, API
 versions, the proxy path, durations and sizes, all before any network access.
 

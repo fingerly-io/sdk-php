@@ -23,6 +23,7 @@
         "symfony/var-dumper": "^6.4 || ^7.0 || ^8.0"
     },
     "suggest": {
+        "ext-apcu": "To report agent sightings under PHP-FPM, where the answer cache and buffer are shared between workers.",
         "psr/http-client": "To send API requests through your own PSR-18 client instead of ext-curl.",
         "psr/http-factory": "Required alongside psr/http-client when supplying your own client.",
         "psr/http-server-middleware": "To mount the same-origin proxy as PSR-15 middleware (Slim, Mezzio).",
