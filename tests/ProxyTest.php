@@ -23,6 +23,10 @@ final class ProxyTest extends TestCase
     private const PATH = '/k7x2qm4a';
     private const IDENTIFIED = '{"request_id":"req_1","visitor_id":"vis_1"}';
 
+    private const SIGNATURE = 'sig1=:dGVzdC1zaWduYXR1cmU=:';
+    private const SIGNATURE_INPUT = 'sig1=("@authority" "signature-agent");created=1735689600;keyid="k1";alg="ed25519";tag="web-bot-auth"';
+    private const SIGNATURE_AGENT = '"https://chatgpt.com"';
+
     private ?TestServer $server = null;
 
     protected function tearDown(): void
@@ -828,6 +832,42 @@ final class ProxyTest extends TestCase
         self::assertSame('"macOS"', TestServer::header($forwarded, 'sec-ch-ua-platform'));
     }
 
+    public function testForwardsWebBotAuthHeadersUnchanged(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED, [
+            'x-request-id' => 'req_1',
+            'fingerly-balance-micros' => '100',
+        ]);
+        $response = $this->proxy()->handle($this->identify(self::PATH, self::signed(self::SIGNATURE, self::SIGNATURE_AGENT)));
+
+        self::assertSame(200, $response->status);
+        self::assertSame(self::IDENTIFIED, $response->body);
+        self::assertSame('req_1', $response->headers['x-request-id'] ?? null);
+        self::assertSame('no-store', $response->headers['cache-control'] ?? null);
+        self::assertArrayNotHasKey('fingerly-balance-micros', $response->headers);
+
+        $forwarded = $this->server->first();
+        self::assertSame(self::SIGNATURE, TestServer::header($forwarded, 'signature'));
+        self::assertSame(self::SIGNATURE_INPUT, TestServer::header($forwarded, 'signature-input'));
+        self::assertSame(self::SIGNATURE_AGENT, TestServer::header($forwarded, 'signature-agent'));
+        self::assertSame('shop.example.com', TestServer::header($forwarded, 'x-fingerly-host'));
+        self::assertArrayNotHasKey('x-custom-token', $forwarded['headers']);
+    }
+
+    public function testDropsAWebBotAuthHeaderOver4096Bytes(): void
+    {
+        $this->server = TestServer::always(200, self::IDENTIFIED);
+        $atCap = '"https://'.str_repeat('a', 4096 - 10).'"';
+        self::assertSame(4096, \strlen($atCap));
+        $response = $this->proxy()->handle($this->identify(self::PATH, self::signed('sig1=:'.str_repeat('A', 4097).':', $atCap)));
+
+        self::assertSame(200, $response->status);
+        $forwarded = $this->server->first();
+        self::assertArrayNotHasKey('signature', $forwarded['headers']);
+        self::assertSame(self::SIGNATURE_INPUT, TestServer::header($forwarded, 'signature-input'));
+        self::assertSame($atCap, TestServer::header($forwarded, 'signature-agent'));
+    }
+
     public function testHandlesConfiguredCrossOriginCorsPreflightAndPost(): void
     {
         $this->server = TestServer::always(200, self::IDENTIFIED);
@@ -844,6 +884,8 @@ final class ProxyTest extends TestCase
         self::assertSame('', $pre->body);
         self::assertSame('https://app.example.com', $pre->headers['access-control-allow-origin'] ?? null);
         self::assertStringContainsString('x-fingerly-sdk-platform', $pre->headers['access-control-allow-headers'] ?? '');
+        // The agent's browser adds the Web Bot Auth headers itself and never preflights them.
+        self::assertStringNotContainsString('signature', $pre->headers['access-control-allow-headers'] ?? '');
         self::assertStringContainsString('retry-after', $pre->headers['access-control-expose-headers'] ?? '');
 
         $forbidden = $proxy->handle(new ProxyRequest('OPTIONS', self::PATH, ['origin' => 'https://evil.example.com']));
@@ -899,6 +941,18 @@ final class ProxyTest extends TestCase
         ob_start();
         $response->send();
         self::assertSame('', (string) ob_get_clean());
+    }
+
+    /** @return array<string, string> */
+    private static function signed(string $signature, string $agent): array
+    {
+        return [
+            'host' => 'shop.example.com',
+            'x-custom-token' => 'app-header',
+            'signature' => $signature,
+            'signature-input' => self::SIGNATURE_INPUT,
+            'signature-agent' => $agent,
+        ];
     }
 
     /**

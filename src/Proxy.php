@@ -76,6 +76,21 @@ final class Proxy
     ];
 
     /**
+     * Web Bot Auth headers an AI agent's browser signs the request with,
+     * forwarded when present, header-safe and at most
+     * {@see self::MAX_SIGNATURE_HEADER_BYTES}. The API ignores a longer one,
+     * so it is dropped here rather than refused.
+     */
+    private const SIGNATURE_HEADERS = [
+        'signature',
+        'signature-input',
+        'signature-agent',
+    ];
+
+    /** The longest Web Bot Auth header value forwarded, in bytes. */
+    private const MAX_SIGNATURE_HEADER_BYTES = 4096;
+
+    /**
      * The response headers relayed to the browser, and nothing else. A content
      * blocker can match a response header by name, so an allowlist is what
      * keeps anything naming Fingerly off the page, whatever the API adds in
@@ -500,6 +515,12 @@ final class Proxy
         foreach (self::FORWARDED_CLIENT_HEADERS as $name) {
             $value = trim(self::copyable($request->header($name)));
             if ('' !== $value) {
+                $headers[$name] = $value;
+            }
+        }
+        foreach (self::SIGNATURE_HEADERS as $name) {
+            $value = trim(self::copyable($request->header($name)));
+            if ('' !== $value && \strlen($value) <= self::MAX_SIGNATURE_HEADER_BYTES) {
                 $headers[$name] = $value;
             }
         }
