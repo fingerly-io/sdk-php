@@ -35,7 +35,6 @@ final class Signal
     public const RESIDENTIAL_PROXY_MEDIUM_CONFIDENCE = 'residential_proxy_medium_confidence';
     public const RESIDENTIAL_PROXY_HIGH_CONFIDENCE = 'residential_proxy_high_confidence';
     public const VPN_PUBLIC = 'vpn_public';
-    public const VPN_TIMEZONE = 'vpn_timezone';
     public const VPN_RELAY = 'vpn_relay';
     public const VPN_MOBILE = 'vpn_mobile';
     public const VPN_OS_MISMATCH = 'vpn_os_mismatch';
@@ -52,6 +51,7 @@ final class Signal
     // Detectors only a browser can produce.
     public const INCOGNITO = 'incognito';
     public const BAD_BOT = 'bad_bot';
+    public const AI_SPOOFED = 'ai_spoofed';
     public const AUTOMATION = 'automation';
     public const FETCH_METADATA_MISSING = 'fetch_metadata_missing';
     public const WEB_TICKET_MISSING = 'web_ticket_missing';
@@ -59,6 +59,7 @@ final class Signal
     public const ANTIDETECT_BROWSER = 'antidetect_browser';
     public const VIRTUAL_MACHINE = 'virtual_machine';
     public const FINGERPRINT_SUPPRESSED = 'fingerprint_suppressed';
+    public const IDENTITY_OBFUSCATED = 'identity_obfuscated';
     public const PRIVACY_SETTINGS = 'privacy_settings';
     public const EMBEDDED_WEB_VIEW = 'embedded_web_view';
     public const REMOTE_CONTROL = 'remote_control';
@@ -117,7 +118,6 @@ final class Signal
         self::RESIDENTIAL_PROXY_MEDIUM_CONFIDENCE,
         self::RESIDENTIAL_PROXY_HIGH_CONFIDENCE,
         self::VPN_PUBLIC,
-        self::VPN_TIMEZONE,
         self::VPN_RELAY,
         self::VPN_MOBILE,
         self::VPN_OS_MISMATCH,
@@ -132,6 +132,7 @@ final class Signal
         self::ANYCAST_IP,
         self::INCOGNITO,
         self::BAD_BOT,
+        self::AI_SPOOFED,
         self::AUTOMATION,
         self::FETCH_METADATA_MISSING,
         self::WEB_TICKET_MISSING,
@@ -139,6 +140,7 @@ final class Signal
         self::ANTIDETECT_BROWSER,
         self::VIRTUAL_MACHINE,
         self::FINGERPRINT_SUPPRESSED,
+        self::IDENTITY_OBFUSCATED,
         self::PRIVACY_SETTINGS,
         self::EMBEDDED_WEB_VIEW,
         self::REMOTE_CONTROL,
