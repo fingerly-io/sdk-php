@@ -33,34 +33,48 @@ interface Store
 
     /**
      * Buffers one sighting: folded into the pending item for its key, or a
-     * new item (always, for a signed request). False when the buffer is full
-     * and it was not buffered.
+     * new item (always, for a signed request). False, and counted as a drop,
+     * when pending and in-flight items together already reach the cap.
      */
     public function add(Sighting $sighting, float $now): bool;
 
     /**
+     * The pending items, not counting the batch in flight.
+     *
      * @return array{items: int, bytes: int, oldest: null|float}
      */
     public function pending(): array;
 
     /**
-     * Removes and returns the oldest items: at most $maxItems, and no more
-     * than $maxBytes estimated unless one item alone is larger.
+     * Moves the oldest items in flight: at most $maxItems, stopping before
+     * the next would pass $maxBytes, and always at least one.
      *
      * @return list<Pending>
      */
     public function take(int $maxItems, int $maxBytes): array;
 
     /**
-     * Returns a batch the API did not take to the front of the buffer, folding
-     * each into a newer item for its key. Items that no longer fit are
-     * dropped and counted.
+     * Returns the batch in flight to the front of the buffer as its oldest
+     * items, each keeping its first-seen time and taking in the count of a
+     * newer item for its key. It always fits: the cap counted it in flight.
      *
      * @param list<Pending> $batch
      */
     public function putBack(array $batch): void;
 
-    /** Claims the right to flush; false when another flush holds it. */
+    /**
+     * Forgets the batch in flight once the API answered it or it was
+     * dropped.
+     *
+     * @param list<Pending> $batch
+     */
+    public function settle(array $batch): void;
+
+    /**
+     * Claims the right to flush; false when another flush holds it.
+     *
+     * @phpstan-impure
+     */
     public function lock(): bool;
 
     public function unlock(): void;
@@ -69,12 +83,12 @@ interface Store
      * The flusher's state: when sending may resume, the current backoff, and
      * what has been logged.
      *
-     * @return array{resume_at: float, backoff: float, auth_logged: bool, invalid_logged_at: float}
+     * @return array{resume_at: float, backoff: float, auth_logged_at: float, invalid_logged_at: float}
      */
     public function state(): array;
 
     /**
-     * @param array{resume_at: float, backoff: float, auth_logged: bool, invalid_logged_at: float} $state
+     * @param array{resume_at: float, backoff: float, auth_logged_at: float, invalid_logged_at: float} $state
      */
     public function saveState(array $state): void;
 

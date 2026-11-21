@@ -81,8 +81,11 @@ final class AgentSightings
     /** How long a 429 without a usable Retry-After stops flushing, in seconds. */
     private const RATE_LIMIT_PAUSE = 60.0;
 
-    /** The most batches one flush call sends: the whole buffer. */
-    private const MAX_BATCHES_PER_FLUSH = 6;
+    /** How long an explicit flush waits for one already in flight, in seconds. */
+    private const WAIT_FOR_FLIGHT = self::DEADLINE + 1.0;
+
+    /** How often a throttled line may be logged, in seconds. */
+    private const LOG_EVERY = 60.0;
 
     private const OPTIONS = [
         'secret_key',
@@ -100,6 +103,9 @@ final class AgentSightings
 
     /** @var array<string, true> what this process has logged once */
     private static array $loggedOnce = [];
+
+    /** @var array<string, float> when this process last logged each throttled line */
+    private static array $loggedAt = [];
 
     private readonly Agents $agents;
     private readonly ?Store $store;
@@ -131,13 +137,14 @@ final class AgentSightings
 
     private bool $deferred = false;
     private bool $closed = false;
+    private float $flightWait = self::WAIT_FOR_FLIGHT;
 
     /**
      * @param array<string, mixed> $options `secret_key` (a `fly_sk_` key) and `client_ip` (a
      *                                      `callable(ProxyRequest): ?string` answering the visitor's
      *                                      address from a source you trust, exactly as for
      *                                      {@see Proxy}) are required. The rest: `capacity` (answers
-     *                                      remembered, 4096 by default, at most 65536),
+     *                                      remembered, 4096 by default; above 65536 is held to 65536),
      *                                      `content_types` (the response media types reported,
      *                                      replacing the default `text/html` and
      *                                      `application/xhtml+xml`), `include_path_prefixes` (paths
@@ -178,10 +185,8 @@ final class AgentSightings
         $origin = Config::bareOrigin($endpoint ?? Config::DEFAULT_ENDPOINT, $allowInsecureLoopback, 'endpoint');
         $apiVersion = $options['api_version'] ?? null;
         $apiVersion = Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null);
-        $capacity = Config::positiveInt($options['capacity'] ?? self::DEFAULT_CAPACITY, 'capacity');
-        if ($capacity > self::MAX_CAPACITY) {
-            throw new ConfigurationException(sprintf('capacity must be at most %d', self::MAX_CAPACITY));
-        }
+        // Above the hard maximum is held to it rather than refused.
+        $capacity = min(self::MAX_CAPACITY, Config::positiveInt($options['capacity'] ?? self::DEFAULT_CAPACITY, 'capacity'));
         $longRunning = $options['long_running'] ?? false;
         if (!is_bool($longRunning)) {
             throw new ConfigurationException('long_running must be a boolean');
@@ -224,7 +229,7 @@ final class AgentSightings
      * on the network and never throws.
      *
      * The answer is {@see AgentSighting::unknown()} (its `visitorKind` is
-     * {@see AgentSighting::UNKNOWN}) until a report of the same user agent,
+     * `''`) until a report of the same user agent,
      * address and Signature-Agent has been answered, after the answer's
      * `ttl`, for a signed request, and whenever reporting is off. Serve such
      * a request as usual.
@@ -314,9 +319,11 @@ final class AgentSightings
     }
 
     /**
-     * Sends everything pending now, unless sending is paused after a refusal.
-     * For a script, a queue worker or a serverless invocation that ends
-     * before a flush would come due. It never throws.
+     * Sends everything pending now, batch after batch, until the buffer is
+     * empty, a refusal pauses sending, or a batch is dropped. It first waits
+     * for a flush already in flight. For a script, a queue worker or a
+     * serverless invocation that ends before a flush would come due. It never
+     * throws.
      */
     public function flush(): void
     {
@@ -391,6 +398,17 @@ final class AgentSightings
     public static function resetLogs(): void
     {
         self::$loggedOnce = [];
+        self::$loggedAt = [];
+    }
+
+    /**
+     * Replaces how long an explicit flush waits for one in flight, for tests.
+     *
+     * @internal
+     */
+    public function useFlightWait(float $seconds): void
+    {
+        $this->flightWait = $seconds;
     }
 
     /**
@@ -458,7 +476,7 @@ final class AgentSightings
         }
 
         try {
-            if (!$store->lock()) {
+            if (!$this->acquire($store, $everything)) {
                 // Another flush is in flight.
                 return;
             }
@@ -466,8 +484,13 @@ final class AgentSightings
             return;
         }
 
+        $items = [];
+
         try {
-            for ($batch = 0; $batch < self::MAX_BATCHES_PER_FLUSH; ++$batch) {
+            // Every batch takes at least one item and the buffer holds at
+            // most 1000, so this ends; the bound only guards against a store
+            // that misbehaves.
+            for ($batch = 0; $batch <= Store::MAX_PENDING; ++$batch) {
                 $now = ($this->now)();
                 if ($store->state()['resume_at'] > $now) {
                     return;
@@ -477,14 +500,23 @@ final class AgentSightings
                 }
                 $items = $store->take(self::FLUSH_ITEMS, self::FLUSH_BYTES);
                 if ([] === $items) {
+                    $store->settle([]);
+
                     return;
                 }
-                if (!$this->send($store, $items)) {
+                $sent = $this->send($store, $items);
+                $items = [];
+                if (!$sent) {
                     return;
                 }
             }
         } catch (\Throwable) {
             // A flush must never surface; the batch it held is lost.
+            try {
+                $store->settle($items);
+            } catch (\Throwable) {
+                // Deliberately ignored.
+            }
         } finally {
             try {
                 $store->unlock();
@@ -492,6 +524,30 @@ final class AgentSightings
                 // Deliberately ignored: the lock expires on its own.
             }
         }
+    }
+
+    /**
+     * Claims the flush. An explicit flush waits for one already in flight
+     * (another worker's, under PHP-FPM) for up to a deadline and a second;
+     * a due flush does not wait.
+     */
+    private function acquire(Store $store, bool $wait): bool
+    {
+        if ($store->lock()) {
+            return true;
+        }
+        if (!$wait) {
+            return false;
+        }
+        $until = microtime(true) + $this->flightWait;
+        while (microtime(true) < $until) {
+            usleep(20_000);
+            if ($store->lock()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -512,41 +568,47 @@ final class AgentSightings
             if (429 === $status) {
                 $store->putBack($items);
                 $this->pauseFor($store, $this->rateLimitPause($e));
-            } elseif (401 === $status || 403 === $status) {
-                $state = $store->state();
-                $state['resume_at'] = ($this->now)() + self::AUTH_PAUSE;
-                if (!$state['auth_logged']) {
-                    $state['auth_logged'] = true;
-                    $this->log(sprintf('the API refused the secret key (%d): it is wrong or revoked; reports are dropped and sending pauses for 60 seconds', $status));
-                }
-                $store->saveState($state);
-            } elseif ($status >= 500) {
+            } elseif (503 === $status) {
                 $store->putBack($items);
                 $this->backOff($store);
+            } elseif (401 === $status || 403 === $status) {
+                $store->settle($items);
+                $this->pauseFor($store, self::AUTH_PAUSE);
+                $this->logThrottled($store, 'auth_logged_at', sprintf('the API refused the secret key (%d): it is wrong or revoked; reports are dropped and sending pauses for 60 seconds', $status));
             } else {
-                $this->logThrottled($store, sprintf('the API could not read a report (%d %s); the batch was dropped', $status, $e->getErrorCode() ?? 'error'));
+                // 422, every other 4xx and 5xx, and a 200 this SDK cannot read.
+                $store->settle($items);
+                $this->logThrottled($store, 'invalid_logged_at', sprintf('the API did not take a report (%d %s); the batch was dropped', $status, $e->getErrorCode() ?? 'error'));
             }
 
             return false;
         } catch (TimeoutException $e) {
             if ($e->requestSent) {
                 // The API may have counted it; sending it again would count twice.
-                $this->logThrottled($store, 'a report timed out after it was sent; the batch was dropped');
+                $store->settle($items);
+                $this->logThrottled($store, 'invalid_logged_at', 'a report timed out after it was sent; the batch was dropped');
             } else {
                 $store->putBack($items);
                 $this->backOff($store);
             }
 
             return false;
-        } catch (ConnectionException) {
-            $store->putBack($items);
-            $this->backOff($store);
+        } catch (ConnectionException $e) {
+            if ('too_large' === $e->kind) {
+                // The API answered, with more than any answer could be.
+                $store->settle($items);
+                $this->logThrottled($store, 'invalid_logged_at', 'the API answered a report with an oversized body; the batch was dropped');
+            } else {
+                $store->putBack($items);
+                $this->backOff($store);
+            }
 
             return false;
         }
 
+        $store->settle($items);
         if (count($answer->items) !== count($items)) {
-            $this->logThrottled($store, 'the API answered a different number of items than were sent; the batch was dropped');
+            $this->logThrottled($store, 'invalid_logged_at', 'the API answered a different number of items than were sent; the batch was dropped');
 
             return false;
         }
@@ -560,7 +622,6 @@ final class AgentSightings
         $store->remember($answer->rulesVersion, $remember, $now);
         $state = $store->state();
         $state['backoff'] = 0.0;
-        $state['auth_logged'] = false;
         $store->saveState($state);
 
         return true;
@@ -607,7 +668,7 @@ final class AgentSightings
             // No address, as when the callback answers null.
         }
         if (null === $clientIp || null === Sighting::canonicalIp($clientIp)) {
-            $this->logOnce('client-ip', 'the client_ip callback returned no valid IP address; the request was not reported');
+            $this->logEveryMinute('client-ip', 'the client_ip callback returned no valid IP address; the request was not reported');
 
             return null;
         }
@@ -623,15 +684,32 @@ final class AgentSightings
         );
     }
 
-    private function logThrottled(Store $store, string $line): void
+    /**
+     * Logs a flush outcome at most once a minute, timed in the store so the
+     * workers of a PHP-FPM pool share it.
+     *
+     * @param 'auth_logged_at'|'invalid_logged_at' $field
+     */
+    private function logThrottled(Store $store, string $field, string $line): void
     {
         $state = $store->state();
         $now = ($this->now)();
-        if ($now - $state['invalid_logged_at'] < 60.0) {
+        if ($now - $state[$field] < self::LOG_EVERY) {
             return;
         }
-        $state['invalid_logged_at'] = $now;
+        $state[$field] = $now;
         $store->saveState($state);
+        $this->log($line);
+    }
+
+    /** Logs a line at most once a minute per process. */
+    private function logEveryMinute(string $what, string $line): void
+    {
+        $now = ($this->now)();
+        if ($now - (self::$loggedAt[$what] ?? -\INF) < self::LOG_EVERY) {
+            return;
+        }
+        self::$loggedAt[$what] = $now;
         $this->log($line);
     }
 

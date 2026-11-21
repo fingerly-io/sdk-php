@@ -9,8 +9,10 @@ namespace Fingerly;
  * the answer to `POST /api/v1/agents/sightings`.
  *
  * {@see AgentSightings::lookup()} answers with one of these, or with
- * {@see self::unknown()} when it has no answer for the request. The unknown
- * answer's `visitorKind` is {@see self::UNKNOWN}, so a check such as
+ * {@see self::unknown()} when it has no answer for the request. PHP constants
+ * cannot hold an object, so the named unknown answer is that one shared
+ * instance: compare with `AgentSighting::unknown() === $answer`, or ask
+ * {@see self::isUnknown()}. Its `visitorKind` is `''`, so a check such as
  * `VisitorKind::AI_BOT === $answer->visitorKind` is false for it, and the
  * request is served as usual.
  *
@@ -19,19 +21,13 @@ namespace Fingerly;
  */
 final class AgentSighting
 {
-    /**
-     * The `visitorKind` of {@see self::unknown()}: there is no answer for the
-     * request yet, so serve it as usual. The API never sends it.
-     */
-    public const UNKNOWN = 'unknown';
-
     private static ?self $unknown = null;
 
     /**
      * @param int          $ttl         seconds the answer may be reused for the same user agent, address
      *                                  and Signature-Agent; 0 for a signed request, which is checked every time
      * @param string       $visitorKind `human`, `ai_bot`, `automation` or `search_crawler`; see {@see VisitorKind}.
-     *                                  {@see self::UNKNOWN} when there is no answer
+     *                                  `''` for {@see self::unknown()}
      * @param null|string  $agent       the agent's name where the API knows it, such as `GPTBot` or `Googlebot`
      * @param null|AiAgent $ai          present when $visitorKind is {@see VisitorKind::AI_BOT}
      */
@@ -48,13 +44,13 @@ final class AgentSighting
      */
     public static function unknown(): self
     {
-        return self::$unknown ??= new self(0, self::UNKNOWN);
+        return self::$unknown ??= new self(0, '');
     }
 
-    /** True for {@see self::unknown()}. */
+    /** True for {@see self::unknown()}: no answer, so serve the request as usual. */
     public function isUnknown(): bool
     {
-        return self::UNKNOWN === $this->visitorKind;
+        return self::unknown() === $this || '' === $this->visitorKind;
     }
 
     /**

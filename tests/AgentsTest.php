@@ -145,11 +145,13 @@ final class AgentsTest extends TestCase
     public function testTheUnknownAnswerIsOneNamedValue(): void
     {
         self::assertSame(AgentSighting::unknown(), AgentSighting::unknown());
-        self::assertSame(AgentSighting::UNKNOWN, AgentSighting::unknown()->visitorKind);
+        self::assertSame('', AgentSighting::unknown()->visitorKind);
         self::assertTrue(AgentSighting::unknown()->isUnknown());
-        self::assertNotContains(AgentSighting::UNKNOWN, VisitorKind::ALL);
+        self::assertNotContains(AgentSighting::unknown()->visitorKind, VisitorKind::ALL);
         self::assertSame(0, AgentSighting::unknown()->ttl);
+        self::assertNull(AgentSighting::unknown()->agent);
         self::assertNull(AgentSighting::unknown()->ai);
+        self::assertFalse((new AgentSighting(60, VisitorKind::HUMAN))->isUnknown());
     }
 
     /**

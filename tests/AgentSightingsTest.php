@@ -61,7 +61,7 @@ final class AgentSightingsTest extends TestCase
 
         self::assertSame(AgentSighting::unknown(), $sightings->lookup($request));
         $sightings->report($request, 'text/html; charset=utf-8');
-        self::assertSame(AgentSighting::UNKNOWN, $sightings->lookup($request)->visitorKind);
+        self::assertSame(AgentSighting::unknown(), $sightings->lookup($request), 'lookup never records');
         $sightings->flush();
 
         $items = $this->sentItems(0);
@@ -253,7 +253,7 @@ final class AgentSightingsTest extends TestCase
 
     public function testTheCapacityIsBoundedByConfiguration(): void
     {
-        foreach ([0, -1, 65537, '4096', 1.5] as $capacity) {
+        foreach ([0, -1, '4096', 1.5] as $capacity) {
             try {
                 new AgentSightings(['secret_key' => TestServer::SECRET_KEY, 'client_ip' => static fn (): string => '192.0.2.1', 'capacity' => $capacity, 'long_running' => true]);
                 self::fail('capacity '.var_export($capacity, true).' must be refused');
@@ -261,8 +261,27 @@ final class AgentSightingsTest extends TestCase
                 $this->addToAssertionCount(1);
             }
         }
-        $sightings = new AgentSightings(['secret_key' => TestServer::SECRET_KEY, 'client_ip' => static fn (): string => '192.0.2.1', 'capacity' => 65536, 'long_running' => true]);
-        self::assertTrue($sightings->isEnabled());
+        foreach ([1, 65536, 65537, 10_000_000] as $capacity) {
+            $sightings = new AgentSightings(['secret_key' => TestServer::SECRET_KEY, 'client_ip' => static fn (): string => '192.0.2.1', 'capacity' => $capacity, 'long_running' => true]);
+            self::assertTrue($sightings->isEnabled(), 'capacity '.$capacity.' is accepted');
+        }
+    }
+
+    public function testACapacityOverTheMaximumIsHeldToIt(): void
+    {
+        $this->serve([$this->answer('r1', array_fill(0, 1, [3600, VisitorKind::HUMAN]))]);
+        // Through the store the constructor builds, which reads the clamped value.
+        $sightings = new AgentSightings([
+            'secret_key' => TestServer::SECRET_KEY,
+            'client_ip' => static fn (ProxyRequest $request): ?string => $request->remoteAddress,
+            'endpoint' => $this->server()->baseUrl(),
+            'allow_insecure_loopback' => true,
+            'capacity' => 1_000_000,
+            'long_running' => true,
+        ]);
+        $store = (new \ReflectionProperty(AgentSightings::class, 'store'))->getValue($sightings);
+        self::assertInstanceOf(MemoryStore::class, $store);
+        self::assertSame(AgentSightings::MAX_CAPACITY, (new \ReflectionProperty(MemoryStore::class, 'capacity'))->getValue($store));
     }
 
     #[DataProvider('stores')]
@@ -288,21 +307,28 @@ final class AgentSightingsTest extends TestCase
     #[DataProvider('stores')]
     public function testFlushesOnceSixtyFourKibibytesArePending(string $store): void
     {
-        $this->serve([$this->answer('r1', array_fill(0, 15, [60, VisitorKind::HUMAN]))]);
-        $sightings = $this->sightings($store);
+        $this->serve([$this->answer('r1', array_fill(0, 16, [60, VisitorKind::HUMAN]))]);
+        $backing = $this->store($store);
+        $sightings = $this->sightings($store, 4096, $backing);
+        // Each item measures its user agent, address (12), host (11) and
+        // method (3), with nothing for the JSON around them: 4027 bytes for
+        // the first ten, 4028 after.
         $long = str_repeat('a', 4000);
-        for ($i = 0; $i < 15; ++$i) {
+        for ($i = 0; $i < 16; ++$i) {
             $sightings->report(self::request($long.$i, '198.51.100.1'), 'text/html');
         }
-        self::assertSame([], $this->deferred);
-        $sightings->report(self::request($long.'15', '198.51.100.1'), 'text/html');
-        self::assertCount(1, $this->deferred);
+        self::assertSame(10 * 4027 + 6 * 4028, $backing->pending()['bytes']);
+        self::assertSame([], $this->deferred, '64438 bytes is not due');
+        $sightings->report(self::request($long.'16', '198.51.100.1'), 'text/html');
+        self::assertCount(1, $this->deferred, '68466 bytes is');
         $this->runDeferred();
 
-        // A batch stays within 64 KiB: the sixteenth item waits.
+        // A batch stops before the item that would pass 64 KiB: the
+        // seventeenth waits.
         self::assertSame(1, $this->server()->requestCount());
-        self::assertCount(15, $this->sentItems(0));
-        self::assertLessThanOrEqual(65536 + 2000, strlen($this->server()->first()['body']));
+        self::assertCount(16, $this->sentItems(0));
+        self::assertSame(1, $backing->pending()['items']);
+        self::assertSame(4028, $backing->pending()['bytes']);
     }
 
     #[DataProvider('stores')]
@@ -343,9 +369,15 @@ final class AgentSightingsTest extends TestCase
         $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN]])]);
         $backing = $this->store($store);
         $sightings = $this->sightings($store, 4096, $backing);
+        $sightings->useFlightWait(0.2);
         $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+        $this->now += 2;
         self::assertTrue($backing->lock());
+        $sightings->flushIfDue();
+        self::assertSame(0, $this->server()->requestCount(), 'a due flush does not wait');
+        $started = microtime(true);
         $sightings->flush();
+        self::assertGreaterThanOrEqual(0.19, microtime(true) - $started, 'an explicit flush waits for the one in flight');
         self::assertSame(0, $this->server()->requestCount());
         $backing->unlock();
         $sightings->flush();
@@ -363,24 +395,16 @@ final class AgentSightingsTest extends TestCase
         $sightings->flush();
         self::assertSame(2, $this->server()->requestCount(), 'no pause after a 422');
         self::assertCount(1, $this->sentItems(1), 'the first batch was dropped, not resent');
-        self::assertCount(1, $this->logsMatching('could not read'));
+        self::assertCount(1, $this->logsMatching('did not take a report'));
 
         $this->now += 60;
         $sightings->report(self::request('c', '198.51.100.1'), 'text/html');
         $sightings->flush();
-        self::assertCount(2, $this->logsMatching('could not read'));
-    }
-
-    #[DataProvider('stores')]
-    public function testAnotherClientErrorIsHandledAsAnInvalidRequest(string $store): void
-    {
-        $this->serve([['status' => 413, 'body' => ''], $this->answer('r1', [[60, VisitorKind::HUMAN]])]);
-        $sightings = $this->sightings($store);
-        $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
-        $sightings->flush();
-        $sightings->flush();
-        self::assertSame(1, $this->server()->requestCount());
-        self::assertCount(1, $this->logsMatching('could not read'));
+        self::assertCount(2, $this->logsMatching('did not take a report'));
+        foreach ($this->logs as $line) {
+            self::assertStringNotContainsString('198.51.100.1', $line, 'no sighting field is logged');
+            self::assertStringNotContainsString('example.com', $line);
+        }
     }
 
     #[DataProvider('stores')]
@@ -472,16 +496,65 @@ final class AgentSightingsTest extends TestCase
             self::assertSame(2, $this->server()->requestCount());
             // a was dropped; only b went the second time.
             self::assertSame('b', $this->sentItems(1)[0]['user_agent']);
-            self::assertCount(1, $this->logsMatching('refused the secret key'), $status.' is logged once');
+            // Logged at most once a minute: the second refusal came a minute later.
+            self::assertCount(2, $this->logsMatching('refused the secret key'), $status.' is logged once a minute');
 
-            // A success resets it, so the next refusal is logged again.
             $this->now += 60;
             $sightings->report(self::request('c', '198.51.100.1'), 'text/html');
             $sightings->flush();
+            self::assertSame(3, $this->server()->requestCount());
             $sightings->report(self::request('d', '198.51.100.1'), 'text/html');
             $sightings->flush();
             self::assertSame(4, $this->server()->requestCount());
-            self::assertCount(2, $this->logsMatching('refused the secret key'));
+            self::assertCount(3, $this->logsMatching('refused the secret key'));
+        }
+    }
+
+    #[DataProvider('stores')]
+    public function testARefusedKeyIsNotLoggedTwiceWithinAMinute(string $store): void
+    {
+        $this->serve([['status' => 401, 'body' => '']]);
+        $backing = $this->store($store);
+        $sightings = $this->sightings($store, 4096, $backing);
+        $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+        $sightings->flush();
+        // Another worker could send in the same minute; lift the pause by hand.
+        $state = $backing->state();
+        $state['resume_at'] = 0.0;
+        $backing->saveState($state);
+        $this->now += 30;
+        $sightings->report(self::request('b', '198.51.100.1'), 'text/html');
+        $sightings->flush();
+        self::assertSame(2, $this->server()->requestCount());
+        self::assertCount(1, $this->logsMatching('refused the secret key'));
+    }
+
+    #[DataProvider('droppedStatuses')]
+    public function testEveryOtherStatusDropsTheBatchAndLogsOncePerMinute(string $store, int $status): void
+    {
+        $this->serve([['status' => $status, 'body' => '']]);
+        $backing = $this->store($store);
+        $sightings = $this->sightings($store, 4096, $backing);
+        $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+        $sightings->flush();
+        self::assertSame(0, $backing->pending()['items'], 'dropped, not kept');
+        self::assertSame(0.0, $backing->state()['resume_at'], 'no pause or backoff');
+        $sightings->report(self::request('b', '198.51.100.1'), 'text/html');
+        $sightings->flush();
+        self::assertSame(2, $this->server()->requestCount());
+        self::assertSame('b', $this->sentItems(1)[0]['user_agent']);
+        self::assertCount(1, $this->logsMatching('did not take a report'));
+    }
+
+    /**
+     * @return iterable<string, array{string, int}>
+     */
+    public static function droppedStatuses(): iterable
+    {
+        foreach (self::stores() as $name => [$store]) {
+            foreach ([500, 502, 504, 413, 400, 404, 409] as $status) {
+                yield $name.' '.$status => [$store, $status];
+            }
         }
     }
 
@@ -491,7 +564,7 @@ final class AgentSightingsTest extends TestCase
         $this->serve([
             ['status' => 503, 'body' => ''],
             ['status' => 503, 'body' => ''],
-            ['status' => 500, 'body' => ''],
+            ['status' => 503, 'body' => ''],
             $this->answer('r1', [[60, VisitorKind::HUMAN]]),
         ]);
         $sightings = $this->sightings($store);
@@ -588,7 +661,7 @@ final class AgentSightingsTest extends TestCase
         $sightings->flush();
         $sightings->flush();
         self::assertSame(1, $this->server()->requestCount());
-        self::assertCount(1, $this->logsMatching('could not read'));
+        self::assertCount(1, $this->logsMatching('did not take a report'));
     }
 
     #[DataProvider('stores')]
@@ -629,20 +702,24 @@ final class AgentSightingsTest extends TestCase
         $sightings->report($b, 'text/html');
         $batch = $backing->take(200, 65536);
         self::assertCount(2, $batch);
-        // While the batch is out: b again, and c.
+        // While the batch is out, a second later: b again, and c.
+        ++$this->now;
         $sightings->report($b, 'text/html');
         $sightings->report($c, 'text/html');
         $backing->putBack($batch);
+        self::assertSame(3, $backing->pending()['items']);
+        self::assertSame(1000.0, $backing->pending()['oldest'], 'the kept items keep their first-seen time');
 
         $again = $backing->take(200, 65536);
         self::assertSame(['a', 'b', 'c'], array_map(static fn ($item): string => $item->sighting->userAgent, $again));
         self::assertSame([1, 2, 1], array_map(static fn ($item): int => $item->count, $again));
+        self::assertSame([1000.0, 1000.0, 1001.0], array_map(static fn ($item): float => $item->firstSeen, $again));
         self::assertSame(0, $backing->pending()['items']);
         self::assertNull($backing->pending()['oldest']);
     }
 
     #[DataProvider('stores')]
-    public function testAKeptBatchThatNoLongerFitsIsCounted(string $store): void
+    public function testTheCapCountsTheBatchInFlight(string $store): void
     {
         $backing = $this->store($store);
         $sightings = $this->sightings($store, 4096, $backing);
@@ -651,11 +728,22 @@ final class AgentSightingsTest extends TestCase
             $sightings->report(self::request('old '.$i, '198.51.100.1'), 'text/html');
         }
         $batch = $backing->take(200, 65536);
+        self::assertSame(800, $backing->pending()['items']);
         for ($i = 0; $i < 200; ++$i) {
             $sightings->report(self::request('new '.$i, '198.51.100.1'), 'text/html');
         }
+        self::assertSame(200, $sightings->droppedCount(), 'no room while 200 are in flight');
+        // An existing key still counts while full.
+        $sightings->report(self::request('old 500', '198.51.100.1'), 'text/html');
         $backing->putBack($batch);
-        self::assertSame(1000, $backing->pending()['items']);
+        self::assertSame(1000, $backing->pending()['items'], 'the kept batch always fits');
+        self::assertSame(200, $sightings->droppedCount(), 'merging back drops nothing');
+
+        // Once the batch in flight is settled, there is room again.
+        $taken = $backing->take(200, 65536);
+        $backing->settle($taken);
+        $sightings->report(self::request('fits now', '198.51.100.1'), 'text/html');
+        self::assertSame(801, $backing->pending()['items']);
         self::assertSame(200, $sightings->droppedCount());
     }
 
@@ -692,13 +780,15 @@ final class AgentSightingsTest extends TestCase
         ]), 'text/html');
         $sightings->flush();
 
+        // Host is sent as received, whatever its length; the Web Bot Auth
+        // headers over 4096 bytes are left out.
         $items = $this->sentItems(0);
-        self::assertSame([['user_agent' => 'a', 'client_ip' => '198.51.100.1', 'method' => 'GET', 'signature_input' => 'sig1=()', 'count' => 1]], $items);
+        self::assertSame([['user_agent' => 'a', 'client_ip' => '198.51.100.1', 'host' => $long, 'method' => 'GET', 'signature_input' => 'sig1=()', 'count' => 1]], $items);
         self::assertTrue($sightings->lookup($tooLong)->isUnknown());
     }
 
     #[DataProvider('stores')]
-    public function testNoClientAddressIsNotReportedAndLoggedOnce(string $store): void
+    public function testNoClientAddressIsNotReportedAndLoggedOncePerMinute(string $store): void
     {
         $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN]])]);
         foreach ([static fn (): ?string => null, static fn (): string => '203.0.113.1, 198.51.100.1', static function (): string {
@@ -711,7 +801,13 @@ final class AgentSightingsTest extends TestCase
             self::assertTrue($sightings->lookup($request)->isUnknown());
         }
         self::assertSame(0, $this->server()->requestCount());
-        self::assertCount(1, $this->logsMatching('client_ip callback'));
+        self::assertCount(1, $this->logsMatching('client_ip callback'), 'at most once a minute');
+
+        $this->now += 60;
+        $this->sightings($store, 4096, null, null, ['client_ip' => static fn (): ?string => null])
+            ->report(self::request('a', '198.51.100.1'), 'text/html')
+        ;
+        self::assertCount(2, $this->logsMatching('client_ip callback'));
     }
 
     #[DataProvider('stores')]

@@ -18,10 +18,10 @@ final class Sighting
     /** The longest header value reported, in bytes; the API refuses a longer one. */
     public const MAX_HEADER_BYTES = 4096;
 
-    /** A rough per-item JSON overhead (names, quotes, separators), in bytes. */
-    private const ITEM_OVERHEAD = 100;
-
-    /** The estimated size of this item in a request body, in bytes. */
+    /**
+     * The bytes this item counts toward the 64 KiB flush trigger: its sent
+     * strings, with no allowance for JSON names or quoting.
+     */
     public readonly int $size;
 
     /** Whether the request carried both `Signature` and `Signature-Input`. */
@@ -41,7 +41,7 @@ final class Sighting
     ) {
         $this->signed = null !== $signature && null !== $signatureInput;
         $this->key = self::key($userAgent, $clientIp, $signatureAgent ?? '', $this->signed);
-        $this->size = self::ITEM_OVERHEAD + strlen($userAgent) + strlen($clientIp) + strlen($host ?? '')
+        $this->size = strlen($userAgent) + strlen($clientIp) + strlen($host ?? '')
             + strlen($method) + strlen($signature ?? '') + strlen($signatureInput ?? '') + strlen($signatureAgent ?? '');
     }
 
@@ -49,8 +49,9 @@ final class Sighting
      * Builds the sighting, or null when the request cannot be reported: a
      * user agent over the limit, or no single client address.
      *
-     * A header over the limit counts as absent before anything else is
-     * decided, so the key and `signed` are computed from what is sent.
+     * A Web Bot Auth header over the limit counts as absent before anything
+     * else is decided, so the key and `signed` are computed from what is sent.
+     * `Host` is sent as received, whatever its length, or left out when empty.
      */
     public static function of(
         string $userAgent,
@@ -72,7 +73,7 @@ final class Sighting
         return new self(
             $userAgent,
             $ip,
-            self::header($host),
+            '' === $host ? null : $host,
             $method,
             self::header($signature),
             self::header($signatureInput),

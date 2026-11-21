@@ -27,12 +27,13 @@ final class MemoryStore implements Store
     private array $pending = [];
 
     private int $bytes = 0;
+    private int $inFlight = 0;
     private int $drops = 0;
     private int $signedSeq = 0;
     private bool $locked = false;
 
-    /** @var array{resume_at: float, backoff: float, auth_logged: bool, invalid_logged_at: float} */
-    private array $state = ['resume_at' => 0.0, 'backoff' => 0.0, 'auth_logged' => false, 'invalid_logged_at' => -\INF];
+    /** @var array{resume_at: float, backoff: float, auth_logged_at: float, invalid_logged_at: float} */
+    private array $state = ['resume_at' => 0.0, 'backoff' => 0.0, 'auth_logged_at' => -\INF, 'invalid_logged_at' => -\INF];
 
     public function __construct(private readonly int $capacity) {}
 
@@ -73,7 +74,7 @@ final class MemoryStore implements Store
 
             return true;
         }
-        if (count($this->pending) >= self::MAX_PENDING) {
+        if (count($this->pending) + $this->inFlight >= self::MAX_PENDING) {
             ++$this->drops;
 
             return false;
@@ -109,6 +110,7 @@ final class MemoryStore implements Store
             unset($this->pending[$id]);
         }
         $this->bytes -= $bytes;
+        $this->inFlight += count($batch);
 
         return $batch;
     }
@@ -124,15 +126,17 @@ final class MemoryStore implements Store
                 unset($this->pending[$item->id]);
                 $this->bytes -= $newer->sighting->size;
                 $item->add($newer->count);
-            } elseif (count($front) + count($this->pending) >= self::MAX_PENDING) {
-                ++$this->drops;
-
-                continue;
             }
             $front[$item->id] = $item;
             $this->bytes += $item->sighting->size;
         }
         $this->pending = $front + $this->pending;
+        $this->inFlight = max(0, $this->inFlight - count($batch));
+    }
+
+    public function settle(array $batch): void
+    {
+        $this->inFlight = max(0, $this->inFlight - count($batch));
     }
 
     public function lock(): bool

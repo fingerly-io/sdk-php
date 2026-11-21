@@ -780,8 +780,8 @@ both after the response was sent. A framework with none of these calls
 `lookup()` answers from memory only. It never waits on the network and never
 throws. Until Fingerly has answered for the same user agent, address and
 `Signature-Agent`, and again once that answer's `ttl` has passed, it returns
-`AgentSighting::unknown()`, whose `visitorKind` is `AgentSighting::UNKNOWN`:
-serve such a request as usual.
+the one shared `AgentSighting::unknown()` answer (no agent, no `ai`, an empty
+`visitorKind`): serve such a request as usual.
 
 ```php
 use Fingerly\AgentSighting;
@@ -790,7 +790,7 @@ use Fingerly\VisitorKind;
 
 $answer = $sightings->lookup(\Fingerly\AgentSightings\LaravelMiddleware::toProxyRequest($request));
 
-if (AgentSighting::UNKNOWN === $answer->visitorKind) {
+if (AgentSighting::unknown() === $answer) {
     // Not answered yet: serve as usual.
 } elseif (VisitorKind::AI_BOT === $answer->visitorKind && AiPurpose::TRAINING === $answer->ai?->purpose) {
     // Fingerly said an AI training crawler sent this request ($answer->ai->provider, $answer->agent).
@@ -831,10 +831,10 @@ reported; a Web Bot Auth header over 4096 bytes is left out.
 
 | | |
 | --- | --- |
-| Answers remembered | 4096 by default (`capacity`, at most 65536), least recently used dropped first, each for the `ttl` Fingerly gave. About 1.5 MB at the default, about 25 MB at the most. When Fingerly's rules change, every remembered answer is dropped. |
-| Pending reports | At most 1000. Repeats of the same request are one report with a count, cache hits included, so the console counts them; signed requests are never folded. When the buffer is full, a new request is not reported and `droppedCount()` goes up. |
+| Answers remembered | 4096 by default (`capacity`; a larger value is held to 65536), least recently used dropped first, each for the `ttl` Fingerly gave. About 1.5 MB at the default, about 25 MB at the most. When Fingerly's rules change, every remembered answer is dropped. |
+| Pending reports | At most 1000, the batch being sent included. Repeats of the same request are one report with a count, cache hits included, so the console counts them; signed requests are never folded. When the buffer is full, a new request is not reported and `droppedCount()` goes up. |
 | Sending | Up to 200 reports per call, when 200 or 64 KiB are pending or 2 seconds after the oldest, at most one call at a time, each with a 5 second deadline. Never on the request being served. |
-| Failures | Requests are served as usual and `lookup()` keeps answering. A rate limit keeps the reports until `Retry-After` has passed; a wrong or revoked key drops them and pauses sending for a minute; a server or network error keeps them and retries with backoff from 1 to 60 seconds; a call that timed out after it was sent is dropped rather than counted twice. |
+| Failures | Requests are served as usual and `lookup()` keeps answering. A rate limit keeps the reports until `Retry-After` has passed; a wrong or revoked key drops them and pauses sending for a minute; a `503` or a network error before any answer keeps them and retries with backoff from 1 to 60 seconds; a call that timed out after it was sent is dropped rather than counted twice; any other answer drops them. A failure is logged at most once a minute, and no log line holds a reported field. |
 
 Under **PHP-FPM** the cache and the pending reports live in APCu, shared by
 the pool's workers and held to the same bounds. The request that makes a send

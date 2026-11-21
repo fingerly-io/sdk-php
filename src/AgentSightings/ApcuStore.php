@@ -52,6 +52,8 @@ final class ApcuStore implements Store
             return null;
         }
         if ($entry[1] <= $now) {
+            $this->apcu->delete($this->prefix.'c:'.$key);
+
             return null;
         }
         $seq = $this->apcu->fetch($this->prefix.'cseq');
@@ -85,7 +87,9 @@ final class ApcuStore implements Store
 
             return true;
         }
-        if ($this->apcu->inc($this->prefix.'pn') > self::MAX_PENDING) {
+        $inFlight = $this->apcu->fetch($this->prefix.'pf');
+        $inFlight = is_int($inFlight) ? $inFlight : 0;
+        if ($this->apcu->inc($this->prefix.'pn') + $inFlight > self::MAX_PENDING) {
             $this->apcu->inc($this->prefix.'pn', -1);
             $this->apcu->delete($itemKey);
             $this->apcu->inc($this->prefix.'drops');
@@ -154,6 +158,10 @@ final class ApcuStore implements Store
         }
         $this->apcu->store($this->prefix.'phead', $seq);
         $this->resetOldest($seq, $tail);
+        // One batch is in flight at a time and only its flusher writes this.
+        // It expires with the lock, so a worker that died mid-flush cannot
+        // shrink the buffer for good.
+        $this->apcu->store($this->prefix.'pf', count($batch), self::LOCK_TTL);
 
         return $batch;
     }
@@ -166,23 +174,17 @@ final class ApcuStore implements Store
         $oldest = is_float($oldest) ? $oldest : \INF;
         foreach (array_reverse($batch) as $item) {
             $itemKey = $this->prefix.'i:'.$item->id;
-            if (!$this->apcu->add($itemKey, [$item->sighting, $item->firstSeen, 0], self::ITEM_TTL)) {
-                // A newer item for the key exists: count into it.
-                $this->apcu->inc($this->prefix.'n:'.$item->id, $item->count, self::ITEM_TTL);
-
-                continue;
+            if ($this->apcu->add($itemKey, [$item->sighting, $item->firstSeen, 0], self::ITEM_TTL)) {
+                // No room is checked: the cap counted this item in flight.
+                $this->apcu->inc($this->prefix.'pn');
+                $this->apcu->inc($this->prefix.'pb', $item->sighting->size);
             }
-            if ($this->apcu->inc($this->prefix.'pn') > self::MAX_PENDING) {
-                $this->apcu->inc($this->prefix.'pn', -1);
-                $this->apcu->delete($itemKey);
-                $this->apcu->inc($this->prefix.'drops');
-
-                continue;
-            }
+            // Otherwise a newer item for the key exists. It becomes this one,
+            // at the front with the older first-seen time, and its count is
+            // added; its own queue number no longer matches, so it is skipped.
             --$head;
             $this->apcu->store($itemKey, [$item->sighting, $item->firstSeen, $head], self::ITEM_TTL);
             $this->apcu->inc($this->prefix.'n:'.$item->id, $item->count, self::ITEM_TTL);
-            $this->apcu->inc($this->prefix.'pb', $item->sighting->size);
             $this->apcu->store($this->prefix.'q:'.$head, $item->id, self::ITEM_TTL);
             $oldest = min($oldest, $item->firstSeen);
         }
@@ -190,6 +192,12 @@ final class ApcuStore implements Store
         if (\INF !== $oldest) {
             $this->apcu->store($this->prefix.'poldest', $oldest);
         }
+        $this->apcu->delete($this->prefix.'pf');
+    }
+
+    public function settle(array $batch): void
+    {
+        $this->apcu->delete($this->prefix.'pf');
     }
 
     public function lock(): bool
@@ -205,7 +213,7 @@ final class ApcuStore implements Store
     public function state(): array
     {
         $state = $this->apcu->fetch($this->prefix.'state');
-        $default = ['resume_at' => 0.0, 'backoff' => 0.0, 'auth_logged' => false, 'invalid_logged_at' => -\INF];
+        $default = ['resume_at' => 0.0, 'backoff' => 0.0, 'auth_logged_at' => -\INF, 'invalid_logged_at' => -\INF];
         if (!is_array($state)) {
             return $default;
         }
@@ -213,7 +221,7 @@ final class ApcuStore implements Store
         return [
             'resume_at' => is_float($state['resume_at'] ?? null) ? $state['resume_at'] : 0.0,
             'backoff' => is_float($state['backoff'] ?? null) ? $state['backoff'] : 0.0,
-            'auth_logged' => true === ($state['auth_logged'] ?? false),
+            'auth_logged_at' => is_float($state['auth_logged_at'] ?? null) ? $state['auth_logged_at'] : -\INF,
             'invalid_logged_at' => is_float($state['invalid_logged_at'] ?? null) ? $state['invalid_logged_at'] : -\INF,
         ];
     }
