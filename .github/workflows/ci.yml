@@ -25,7 +25,7 @@ jobs:
       - uses: ramsey/composer-install@v3
       - run: composer validate --strict
       - run: vendor/bin/phpunit
-      - run: vendor/bin/phpstan analyse --no-progress
+      - run: vendor/bin/phpstan analyse --no-progress --memory-limit=512M
 
   # The adapters are exercised against every framework major they claim,
   # each on the oldest PHP that major supports.
@@ -115,5 +115,11 @@ jobs:
                 "proxy_key" => "fly_px_production_ci",
                 "client_ip" => fn ($r) => "203.0.113.7",
             ]);
+            $sightings = new Fingerly\AgentSightings([
+                "secret_key" => "fly_sk_production_ci",
+                "client_ip" => fn ($r) => "203.0.113.7",
+                "long_running" => true,
+            ]);
+            if (!$sightings->lookup(new Fingerly\Proxy\ProxyRequest("GET", "/"))->isUnknown()) { exit(1); }
             echo "the dependency-free build works", PHP_EOL;
           '

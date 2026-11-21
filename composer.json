@@ -41,7 +41,7 @@
     },
     "scripts": {
         "test": "phpunit",
-        "stan": "phpstan analyse",
+        "stan": "phpstan analyse --memory-limit=512M",
         "fmt": "php-cs-fixer fix",
         "fmt:check": "php-cs-fixer fix --dry-run --diff",
         "contract:sync": "php tools/sync-contract.php"
