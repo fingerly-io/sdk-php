@@ -206,7 +206,11 @@ release has not heard of.
 | `Platform` | `Event::$platform` | `WEB`, `ANDROID`, `IOS` |
 | `AnonymityNetwork` | `Event::$anonymityNetwork` | `TOR`, `RELAY`, `VPN`, `PROXY`, `HOSTING` |
 | `DeviceKind` | `Event::$deviceKind` | `DESKTOP`, `MOBILE`, `TABLET`, `SERVER` |
-| `VisitorKind` | `Event::$visitorKind` | `HUMAN`, `AI_BOT`, `AUTOMATION`, `SEARCH_CRAWLER` |
+| `VisitorKind` | `Event::$visitorKind`, the `kind` filter | `HUMAN`, `AI_BOT`, `AUTOMATION`, `SEARCH_CRAWLER` |
+| `AiPurpose` | `AiAgent::$purpose`, the `ai_purpose` filter | `TRAINING`, `SEARCH`, `USER_FETCH`, `AGENT` |
+| `AiRuntime` | `AiAgent::$runtime` | `PROVIDER_CLOUD`, `HOSTED_BROWSER`, `USER_DEVICE` |
+| `AiVerificationMethod` | `AiVerification::$method` | `SIGNATURE`, `IP_LIST`, `REVERSE_DNS`, `NONE` |
+| `AiVerificationResult` | `AiVerification::$result` | `PASS`, `FAIL`, `NOT_ATTEMPTED` |
 | `AttestationState` | `$event->document['attestation']['state']` | `ATTESTED`, `NOT_ATTESTED`, `FAILED` |
 | `AttestationStatus` | `$event->document['attestation']['status']` | `VERIFIED`, `INDETERMINATE`, `INVALID`, `ABSENT`, `UNCONFIGURED` |
 | `AttestSkippedReason` | `$event->document['attestation']['attest_skipped']` | `NOT_OFFERED`, `UNSUPPORTED`, `CHALLENGE_UNAVAILABLE`, `KEY_ERROR`, `TIMEOUT`, `BACKOFF`, `INSTALL_UNAVAILABLE` |
@@ -224,6 +228,23 @@ webhooks and the archived document's `risk.triggers` carry the detector
 
 `Event::$projectId` names the Fingerly project the event belongs to, as a UUID
 string. It is `null` when the server is older than projects.
+
+`Event::$ai` is set only when `Event::$visitorKind` is `VisitorKind::AI_BOT`,
+and `null` otherwise: an `AiAgent` with the agent's `name`, `provider`,
+`purpose`, `runtime`, `declared` and `verification` (`method`, `result`). The
+identity comes from the user agent, which anyone can copy, and is not verified
+yet (`AiVerificationMethod::NONE`, `AiVerificationResult::NOT_ATTEMPTED`), so
+treat it as a label, not proof. Only clients that run the Fingerly SDK produce
+events, so crawlers that do not run JavaScript never appear. `events->list()`
+filters on `kind`, `ai_provider` (exact and case-sensitive, such as `OpenAI`)
+and `ai_purpose`.
+
+```php
+$fetches = $fingerly->events->list([
+    'kind' => \Fingerly\VisitorKind::AI_BOT,
+    'ai_purpose' => \Fingerly\AiPurpose::USER_FETCH,
+]);
+```
 
 ### Verify a backend action
 
@@ -748,8 +769,8 @@ consumption, decoding into `EventVerification.php` and `EventConsumption.php`
 and throwing `EventAlreadyConsumedException.php`, and `DeviceCheck.php`
 the DeviceCheck reads and writes, decoding into `DeviceCheckBits.php` and
 `DeviceCheckWrite.php`;
-`Event.php`, `EventPage.php`, `EventTrigger.php` and
-`WebhookEvent.php` are what they decode into, and `Signal.php`,
+`Event.php`, `EventPage.php`, `EventTrigger.php`, `AiAgent.php`,
+`AiVerification.php` and `WebhookEvent.php` are what they decode into, and `Signal.php`,
 `SuspectLevel.php` and the other constant classes name the closed string sets
 their fields hold. `Json.php` reads those
 bodies without trusting their shape. `Webhook.php` verifies signatures and

@@ -59,6 +59,9 @@ final class Event
      * @param null|string               $projectId        the Fingerly project the event belongs to, as a UUID string;
      *                                                    null when the server predates projects
      * @param null|string               $reason           why enrichment did not happen, on an unavailable event
+     * @param null|AiAgent              $ai               the AI agent behind the event, present only when $visitorKind is
+     *                                                    {@see VisitorKind::AI_BOT}; its identity comes from the user
+     *                                                    agent and is not verified yet
      */
     public function __construct(
         public readonly string $requestId,
@@ -92,6 +95,7 @@ final class Event
         public readonly array $raw = [],
         public readonly ?string $projectId = null,
         public readonly ?string $reason = null,
+        public readonly ?AiAgent $ai = null,
     ) {}
 
     /**
@@ -166,6 +170,7 @@ final class Event
             raw: $body,
             projectId: Json::nullableString($body, 'project_id'),
             reason: Json::nullableString($body, 'reason'),
+            ai: AiAgent::fromMember($body['ai'] ?? null),
         );
     }
 }

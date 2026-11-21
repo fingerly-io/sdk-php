@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Fingerly\Tests;
 
+use Fingerly\AiPurpose;
+use Fingerly\AiRuntime;
+use Fingerly\AiVerificationMethod;
+use Fingerly\AiVerificationResult;
 use Fingerly\AnonymityNetwork;
 use Fingerly\AttestationState;
 use Fingerly\AttestationStatus;
@@ -155,6 +159,14 @@ final class EnumsTest extends TestCase
         yield 'DeviceKind' => [DeviceKind::class, ['desktop', 'mobile', 'tablet', 'server']];
 
         yield 'VisitorKind' => [VisitorKind::class, ['human', 'ai_bot', 'automation', 'search_crawler']];
+
+        yield 'AiPurpose' => [AiPurpose::class, ['training', 'search', 'user_fetch', 'agent']];
+
+        yield 'AiRuntime' => [AiRuntime::class, ['provider_cloud', 'hosted_browser', 'user_device']];
+
+        yield 'AiVerificationMethod' => [AiVerificationMethod::class, ['signature', 'ip_list', 'reverse_dns', 'none']];
+
+        yield 'AiVerificationResult' => [AiVerificationResult::class, ['pass', 'fail', 'not_attempted']];
     }
 
     public function testConstantsCompareIdenticalToDecodedFields(): void
