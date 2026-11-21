@@ -235,10 +235,16 @@ string. It is `null` when the server is older than projects.
 `Event::$ai` is set only when `Event::$visitorKind` is `VisitorKind::AI_BOT`,
 and `null` otherwise: an `AiAgent` with the agent's `name`, `provider`,
 `purpose`, `runtime`, `declared` and `verification` (`method`, `result`). The
-identity comes from the user agent, which anyone can copy, and is not verified
-yet (`AiVerificationMethod::NONE`, `AiVerificationResult::NOT_ATTEMPTED`), so
-treat it as a label, not proof. Only clients that run the Fingerly SDK produce
-events, so crawlers that do not run JavaScript never appear. `events->list()`
+agent is named by a Web Bot Auth signature when the request carried one,
+otherwise by its user agent. `verification` says how far that was checked:
+`AiVerificationMethod::SIGNATURE` (the operator's published key signed the
+request) or `AiVerificationMethod::IP_LIST` (the address is inside the
+operator's published ranges), with result `AiVerificationResult::PASS`,
+`AiVerificationResult::FAIL` (the name was borrowed), or
+`AiVerificationResult::NOT_ATTEMPTED` with method `AiVerificationMethod::NONE`
+(the operator publishes nothing to check against, or it could not be checked;
+the name is then only the client's claim). Only clients that run the Fingerly
+SDK produce events, so crawlers that do not run JavaScript never appear. `events->list()`
 filters on `kind`, `ai_provider` (exact and case-sensitive, such as `OpenAI`)
 and `ai_purpose`.
 
