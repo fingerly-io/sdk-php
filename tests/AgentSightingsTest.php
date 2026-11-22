@@ -905,19 +905,27 @@ final class AgentSightingsTest extends TestCase
         $long = str_repeat('x', 4097);
         $tooLong = self::request($long, '198.51.100.1');
         $sightings->report($tooLong, 'text/html');
+        $longMethod = new ProxyRequest($long, '/', ['user-agent' => 'b', 'host' => 'example.com'], '', '198.51.100.1');
+        $sightings->report($longMethod, 'text/html');
         $sightings->report(self::request('a', '198.51.100.1', '/', [
             'host' => $long,
             'signature' => $long,
             'signature-input' => 'sig1=()',
             'signature-agent' => $long,
         ]), 'text/html');
+        // Under the limit in bytes here, over it as the API reads it.
+        $sightings->report(self::request('c', '198.51.100.1', '/', ['host' => str_repeat("\xE9", 2000)]), 'text/html');
         $sightings->flush();
 
-        // Host is sent as received, whatever its length; the Web Bot Auth
-        // headers over 4096 bytes are left out.
+        // A user agent or method over 4096 bytes is not reported; Host and
+        // the Web Bot Auth headers over it are left out of a reported item.
         $items = $this->sentItems(0);
-        self::assertSame([['user_agent' => 'a', 'client_ip' => '198.51.100.1', 'host' => $long, 'method' => 'GET', 'signature_input' => 'sig1=()', 'count' => 1]], $items);
+        self::assertSame([
+            ['user_agent' => 'a', 'client_ip' => '198.51.100.1', 'method' => 'GET', 'signature_input' => 'sig1=()', 'count' => 1],
+            ['user_agent' => 'c', 'client_ip' => '198.51.100.1', 'method' => 'GET', 'count' => 1],
+        ], $items);
         self::assertTrue($sightings->lookup($tooLong)->isUnknown());
+        self::assertTrue($sightings->lookup($longMethod)->isUnknown());
     }
 
     #[DataProvider('stores')]

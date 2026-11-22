@@ -111,6 +111,8 @@ final class AgentSightingsKeyTest extends TestCase
     {
         self::assertNull(Sighting::of(str_repeat('a', 4097), '192.0.2.1', 'h', 'GET', '', '', ''));
         self::assertNotNull(Sighting::of(str_repeat('a', 4096), '192.0.2.1', 'h', 'GET', '', '', ''));
+        self::assertNull(Sighting::of('ua', '192.0.2.1', 'h', str_repeat('A', 4097), '', '', ''), 'nor is a method over it');
+        self::assertNotNull(Sighting::of('ua', '192.0.2.1', 'h', str_repeat('A', 4096), '', '', ''));
     }
 
     public function testNoAddressIsNotReported(): void
@@ -124,7 +126,8 @@ final class AgentSightingsKeyTest extends TestCase
         $long = str_repeat('x', 4097);
         $sighting = Sighting::of('ua', '192.0.2.1', $long, 'GET', $long, 'sig1=()', $long);
         self::assertNotNull($sighting);
-        self::assertSame($long, $sighting->host, 'Host is not bounded');
+        self::assertNull($sighting->host, 'Host over the limit is left out');
+        self::assertSame(str_repeat('x', 4096), Sighting::of('ua', '192.0.2.1', str_repeat('x', 4096), 'GET', '', '', '')?->host);
         self::assertNull($sighting->signature);
         self::assertNull($sighting->signatureAgent);
         self::assertSame('sig1=()', $sighting->signatureInput);
@@ -133,7 +136,7 @@ final class AgentSightingsKeyTest extends TestCase
         self::assertSame(Sighting::key('ua', '192.0.2.1', '', false), $sighting->key);
 
         $item = $sighting->report(1)->toArray();
-        self::assertSame($long, $item['host']);
+        self::assertArrayNotHasKey('host', $item);
         self::assertSame(1, $item['count'], 'count is sent even when 1');
         self::assertArrayNotHasKey('signature', $item);
         self::assertArrayNotHasKey('signature_agent', $item);

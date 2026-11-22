@@ -853,9 +853,12 @@ received, the client address from your `client_ip` callback, `Host`, the
 method, and the Web Bot Auth `Signature`, `Signature-Input` and
 `Signature-Agent` headers when present, plus a count. Never the path, the
 query string, cookies, `Authorization`, any other header, the body or the
-response, and the SDK logs none of them. A request whose `User-Agent` is over
-4096 bytes, or whose `client_ip` callback gives no single address, is not
-reported; a Web Bot Auth header over 4096 bytes is left out.
+response, and the SDK logs none of them. A request whose `User-Agent` or
+method is over 4096 bytes, or whose `client_ip` callback gives no single
+address, is not reported; a `Host` or Web Bot Auth header over 4096 bytes is
+left out. Lengths are counted as Fingerly reads them, where each byte that is
+not UTF-8 arrives as a three-byte U+FFFD. An answer item the SDK cannot read
+leaves that one request unknown.
 
 ### Memory and sending
 

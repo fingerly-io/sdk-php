@@ -15,7 +15,11 @@ use Fingerly\AgentSightingReport;
  */
 final class Sighting
 {
-    /** The longest header value reported, in bytes; the API refuses a longer one. */
+    /**
+     * The longest header value reported, in bytes as the API reads them; the
+     * API refuses a longer user agent or Web Bot Auth header, and this SDK
+     * holds `Host` and the method to it too.
+     */
     public const MAX_HEADER_BYTES = 4096;
 
     /**
@@ -47,13 +51,14 @@ final class Sighting
 
     /**
      * Builds the sighting, or null when the request cannot be reported: a
-     * user agent over the limit as the API reads it, or no single client
-     * address.
+     * user agent or a method over the limit as the API reads it, or no
+     * single client address.
      *
      * A Web Bot Auth header that is empty, only whitespace or over the limit
      * counts as absent before anything
      * else is decided, so the key and `signed` are computed from what is sent.
-     * `Host` is sent as received, whatever its length, or left out when empty.
+     * `Host` is sent as received, or left out when empty or over the limit;
+     * the API uses it only to check a signature.
      */
     public static function of(
         string $userAgent,
@@ -64,7 +69,7 @@ final class Sighting
         string $signatureInput,
         string $signatureAgent,
     ): ?self {
-        if (self::sentLength($userAgent) > self::MAX_HEADER_BYTES) {
+        if (self::sentLength($userAgent) > self::MAX_HEADER_BYTES || self::sentLength($method) > self::MAX_HEADER_BYTES) {
             return null;
         }
         $ip = null === $clientIp ? null : self::canonicalIp($clientIp);
@@ -75,7 +80,7 @@ final class Sighting
         return new self(
             $userAgent,
             $ip,
-            '' === $host ? null : $host,
+            '' === $host || self::sentLength($host) > self::MAX_HEADER_BYTES ? null : $host,
             $method,
             self::header($signature),
             self::header($signatureInput),
