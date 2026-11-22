@@ -798,6 +798,32 @@ final class AgentSightingsTest extends TestCase
     }
 
     #[DataProvider('stores')]
+    public function testAMalformedAnswerItemIsUnknownForThatRequestOnly(string $store): void
+    {
+        $good = ['ttl' => 60, 'visitor_kind' => VisitorKind::AI_BOT, 'agent' => 'GPTBot'];
+        $this->serve([['status' => 200, 'body' => (string) json_encode(['rules_version' => 'r1', 'items' => [
+            $good,
+            ['ttl' => '60', 'visitor_kind' => VisitorKind::HUMAN],
+            'not an object',
+            ['ttl' => 60, 'visitor_kind' => VisitorKind::AI_BOT, 'ai' => ['name' => 'X']],
+            $good + ['client' => 'later'],
+        ]])]]);
+        $sightings = $this->sightings($store);
+        $requests = [];
+        foreach (['a', 'b', 'c', 'd', 'e'] as $i => $userAgent) {
+            $requests[] = $request = self::request($userAgent, '198.51.100.'.($i + 1));
+            $sightings->report($request, 'text/html');
+        }
+        $sightings->flush();
+
+        // Each answer stays with its own request; the unreadable ones are
+        // unknown, and the batch is not dropped.
+        self::assertSame(['GPTBot', null, null, null, 'GPTBot'], array_map(static fn (ProxyRequest $r): ?string => $sightings->lookup($r)->agent, $requests));
+        self::assertTrue($sightings->lookup($requests[1])->isUnknown());
+        self::assertSame([], $this->logsMatching('did not take a report'));
+    }
+
+    #[DataProvider('stores')]
     public function testAFullBufferDropsNewKeysAndCountsThem(string $store): void
     {
         $this->serve([$this->answer('r1', array_fill(0, 200, [60, VisitorKind::HUMAN]))]);

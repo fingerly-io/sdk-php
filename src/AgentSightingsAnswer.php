@@ -10,7 +10,9 @@ final class AgentSightingsAnswer
     /**
      * @param string              $rulesVersion names the classification rules; when it changes, every
      *                                          remembered answer is stale
-     * @param list<AgentSighting> $items        one answer per reported request, in the order sent
+     * @param list<AgentSighting> $items        one answer per reported request, in the order sent;
+     *                                          {@see AgentSighting::unknown()} for an item this SDK
+     *                                          cannot read
      */
     public function __construct(
         public readonly string $rulesVersion,
@@ -33,12 +35,20 @@ final class AgentSightingsAnswer
         }
         $items = [];
         foreach ($raw as $item) {
+            // One item this SDK cannot read is that one request unanswered,
+            // kept in its position so every other answer still lines up.
             if (!is_array($item)) {
-                throw new ApiException(200, 'invalid_response', ['field' => 'items']);
+                $items[] = AgentSighting::unknown();
+
+                continue;
             }
 
-            /** @var array<string, mixed> $item */
-            $items[] = AgentSighting::fromArray($item);
+            try {
+                /** @var array<string, mixed> $item */
+                $items[] = AgentSighting::fromArray($item);
+            } catch (ApiException) {
+                $items[] = AgentSighting::unknown();
+            }
         }
 
         return new self($rulesVersion, $items);
