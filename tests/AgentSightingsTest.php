@@ -11,6 +11,7 @@ use Fingerly\AgentSightings\ApcuStore;
 use Fingerly\AgentSightings\MemoryStore;
 use Fingerly\AgentSightings\Sighting;
 use Fingerly\AgentSightings\Store;
+use Fingerly\Client;
 use Fingerly\ConfigurationException;
 use Fingerly\Proxy\ProxyRequest;
 use Fingerly\VisitorKind;
@@ -702,7 +703,7 @@ final class AgentSightingsTest extends TestCase
         self::assertSame('a', $this->sentItems(0)[0]['user_agent']);
     }
 
-    public function testATimeoutAfterSendingDropsTheBatch(): void
+    public function testATimeoutAfterSendingDropsTheBatchAndBacksOff(): void
     {
         $this->serve([['status' => 200, 'body' => '{}', 'delay' => 6.0]]);
         $backing = new MemoryStore(4096);
@@ -712,7 +713,8 @@ final class AgentSightingsTest extends TestCase
         $sightings->flush();
         self::assertLessThan(5.9, microtime(true) - $started, 'the deadline is 5 seconds');
         self::assertSame(0, $backing->pending()['items'], 'the batch is not kept');
-        self::assertSame(0.0, $backing->state()['resume_at'], 'no pause');
+        self::assertSame(1.0, $backing->state()['backoff'], 'sending backs off, so a silent API does not hold a worker every time a send comes due');
+        self::assertGreaterThan($this->now, $backing->state()['resume_at']);
         self::assertCount(1, $this->logsMatching('timed out'));
     }
 
@@ -721,7 +723,7 @@ final class AgentSightingsTest extends TestCase
      * report was read: the API may have counted it.
      */
     #[DataProvider('lostConnections')]
-    public function testAConnectionLostAfterSendingDropsTheBatch(string $mode): void
+    public function testAConnectionLostAfterSendingDropsTheBatchAndBacksOff(string $mode): void
     {
         if ('reset' === $mode && !\function_exists('socket_import_stream')) {
             self::markTestSkipped('resetting a connection needs ext-sockets');
@@ -731,7 +733,7 @@ final class AgentSightingsTest extends TestCase
         $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
         $sightings->flush();
         self::assertSame(0, $backing->pending()['items'], $mode.': the batch is not kept');
-        self::assertSame(0.0, $backing->state()['resume_at'], $mode.': no backoff');
+        self::assertSame(1.0, $backing->state()['backoff'], $mode.': sending backs off');
         self::assertCount(1, $this->logsMatching('connection failed after a report was sent'));
     }
 
@@ -809,7 +811,7 @@ final class AgentSightingsTest extends TestCase
         $c = self::request('c', '198.51.100.1');
         $sightings->report($a, 'text/html');
         $sightings->report($b, 'text/html');
-        $batch = $backing->take(200, 65536);
+        $batch = $backing->take(200, 65536, $this->now);
         self::assertCount(2, $batch);
         // While the batch is out, a second later: b again, and c.
         ++$this->now;
@@ -819,7 +821,7 @@ final class AgentSightingsTest extends TestCase
         self::assertSame(3, $backing->pending()['items']);
         self::assertSame(1000.0, $backing->pending()['oldest'], 'the kept items keep their first-seen time');
 
-        $again = $backing->take(200, 65536);
+        $again = $backing->take(200, 65536, $this->now);
         self::assertSame(['a', 'b', 'c'], array_map(static fn ($item): string => $item->sighting->userAgent, $again));
         self::assertSame([1, 2, 1], array_map(static fn ($item): int => $item->count, $again));
         self::assertSame([1000.0, 1000.0, 1001.0], array_map(static fn ($item): float => $item->firstSeen, $again));
@@ -836,7 +838,7 @@ final class AgentSightingsTest extends TestCase
         for ($i = 0; $i < 1000; ++$i) {
             $sightings->report(self::request('old '.$i, '198.51.100.1'), 'text/html');
         }
-        $batch = $backing->take(200, 65536);
+        $batch = $backing->take(200, 65536, $this->now);
         self::assertSame(800, $backing->pending()['items']);
         for ($i = 0; $i < 200; ++$i) {
             $sightings->report(self::request('new '.$i, '198.51.100.1'), 'text/html');
@@ -849,7 +851,7 @@ final class AgentSightingsTest extends TestCase
         self::assertSame(200, $sightings->droppedCount(), 'merging back drops nothing');
 
         // Once the batch in flight is settled, there is room again.
-        $taken = $backing->take(200, 65536);
+        $taken = $backing->take(200, 65536, $this->now);
         $backing->settle($taken);
         $sightings->report(self::request('fits now', '198.51.100.1'), 'text/html');
         self::assertSame(801, $backing->pending()['items']);
@@ -865,12 +867,12 @@ final class AgentSightingsTest extends TestCase
         $sighting = Sighting::of('a', '198.51.100.1', 'h', 'GET', '', '', '');
         self::assertNotNull($sighting);
         $backing->add($sighting, $this->now);
-        $batch = $backing->take(1, 65536);
+        $batch = $backing->take(1, 65536, $this->now);
         $batch[0]->count = 999_999;
         $backing->add($sighting, $this->now);
         $backing->add($sighting, $this->now);
         $backing->putBack($batch);
-        self::assertSame(1_000_000, $backing->take(1, 65536)[0]->count);
+        self::assertSame(1_000_000, $backing->take(1, 65536, $this->now)[0]->count);
     }
 
     #[DataProvider('stores')]
@@ -1035,19 +1037,6 @@ final class AgentSightingsTest extends TestCase
         self::assertFalse($sightings->lookup($request)->isUnknown(), 'lookup still answers after close');
     }
 
-    /**
-     * @return iterable<string, array{string}>
-     */
-    public static function stores(): iterable
-    {
-        yield 'memory' => ['memory'];
-
-        yield 'apcu over a fake' => ['fake-apcu'];
-        if (Apcu::available()) {
-            yield 'apcu' => ['apcu'];
-        }
-    }
-
     public function testWithoutApcuOrLongRunningNothingIsReported(): void
     {
         $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN]])]);
@@ -1096,6 +1085,140 @@ final class AgentSightingsTest extends TestCase
         self::assertSame(0, $apcu->countPrefix('fingerly:sightings:n:i:'));
         self::assertSame(0, $apcu->countPrefix('fingerly:sightings:n:q:'));
         self::assertNull($apcu->fetch('fingerly:sightings:n:lock'));
+    }
+
+    public function testALostApcuQueueEntryNeverStopsReporting(): void
+    {
+        // Three reports wait, then their entries go: APCu expires them after
+        // a day without a flush, or the worker numbering one died before
+        // writing it. Reporting must resume once the gap is old enough.
+        $apcu = new FakeApcu();
+        $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN], [60, VisitorKind::HUMAN]])]);
+        $sightings = $this->sightings('fake-apcu', 4096, new ApcuStore($apcu, 4096, 'n'));
+        foreach (['a', 'b', 'c'] as $userAgent) {
+            $sightings->report(self::request($userAgent, '198.51.100.1'), 'text/html');
+        }
+        $apcu->deletePrefix('fingerly:sightings:n:q:');
+        $apcu->deletePrefix('fingerly:sightings:n:i:');
+        $apcu->deletePrefix('fingerly:sightings:n:n:');
+        $sightings->report(self::request('d', '198.51.100.1'), 'text/html');
+        $sightings->report(self::request('e', '198.51.100.1'), 'text/html');
+
+        $sightings->flush();
+        self::assertSame(0, $this->server()->requestCount(), 'a fresh gap may still be written');
+
+        $this->now += 5;
+        $sightings->flush();
+        self::assertSame(1, $this->server()->requestCount());
+        self::assertSame(['d', 'e'], array_column($this->sentItems(0), 'user_agent'));
+        self::assertSame(['items' => 0, 'bytes' => 0, 'oldest' => null], $this->lastStore?->pending(), 'the lost entries no longer count');
+    }
+
+    public function testAnApcuNamespaceNamesTheSdkVersion(): void
+    {
+        if (!Apcu::available()) {
+            self::markTestSkipped('needs APCu');
+        }
+        $sightings = new AgentSightings([
+            'secret_key' => TestServer::SECRET_KEY,
+            'client_ip' => static fn (ProxyRequest $request): ?string => $request->remoteAddress,
+        ]);
+        $store = (new \ReflectionProperty(AgentSightings::class, 'store'))->getValue($sightings);
+        self::assertInstanceOf(ApcuStore::class, $store);
+        $prefix = (new \ReflectionProperty(ApcuStore::class, 'prefix'))->getValue($store);
+        $namespace = substr(hash('sha256', Client::VERSION."\0".'https://api.fingerly.io/v1'."\0".TestServer::SECRET_KEY), 0, 16);
+        self::assertSame('fingerly:sightings:'.$namespace.':', $prefix, 'objects stored by another SDK version are never read back');
+    }
+
+    #[DataProvider('stores')]
+    public function testADueFlushSendsOneBatch(string $store): void
+    {
+        $this->serve(array_fill(0, 3, $this->answer('r1', array_fill(0, 200, [60, VisitorKind::HUMAN]))));
+        $sightings = $this->sightings($store);
+        $sightings->deferUsing(null);
+        for ($i = 0; $i < 600; ++$i) {
+            $sightings->report(self::request('ua '.$i, '198.51.100.1'), 'text/html');
+        }
+        $sightings->flushIfDue();
+        self::assertSame(1, $this->server()->requestCount(), 'the worker is handed back after one call');
+        $sightings->flushIfDue();
+        self::assertSame(2, $this->server()->requestCount());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function stores(): iterable
+    {
+        yield 'memory' => ['memory'];
+
+        yield 'apcu over a fake' => ['fake-apcu'];
+        if (Apcu::available()) {
+            yield 'apcu' => ['apcu'];
+        }
+    }
+
+    public function testAnExplicitFlushStartsNoBatchOnceItsBudgetIsSpent(): void
+    {
+        $this->serve(array_fill(0, 5, $this->answer('r1', array_fill(0, 200, [60, VisitorKind::HUMAN]))));
+        $sightings = $this->sightings('memory');
+        $sightings->deferUsing(null);
+        for ($i = 0; $i < 1000; ++$i) {
+            $sightings->report(self::request('ua '.$i, '198.51.100.1'), 'text/html');
+        }
+        // Each call takes 4 seconds of the clock: a slow API, just inside
+        // the deadline.
+        $calls = 0;
+        $sightings->useClocks(function () use (&$calls): float {
+            $sent = $this->server()->requestCount();
+            if ($sent > $calls) {
+                $this->now += 4 * ($sent - $calls);
+                $calls = $sent;
+            }
+
+            return $this->now;
+        });
+        $sightings->flush();
+        self::assertSame(3, $this->server()->requestCount(), 'none started after 10 seconds');
+        self::assertSame(400, $this->lastStore?->pending()['items']);
+    }
+
+    public function testTheSendAfterTheResponseRunsAfterEveryOtherShutdownFunction(): void
+    {
+        $this->serve([['status' => 500, 'body' => '{}']]);
+        $output = self::runScript(<<<'PHP'
+            $sightings = new Fingerly\AgentSightings([
+                'secret_key' => 'fly_sk_production_testonlysecret',
+                'client_ip' => static fn (Fingerly\Proxy\ProxyRequest $r): ?string => $r->remoteAddress,
+                'endpoint' => $argv[1],
+                'allow_insecure_loopback' => true,
+                'on_error' => static function (string $line): void { echo "sent\n"; },
+            ], new Fingerly\AgentSightings\MemoryStore(16));
+            register_shutdown_function(static function (): void { echo "application, registered first\n"; });
+            for ($i = 0; $i < 200; ++$i) {
+                $sightings->report(new Fingerly\Proxy\ProxyRequest('GET', '/', ['user-agent' => 'ua '.$i], '', '192.0.2.1'), 'text/html');
+            }
+            register_shutdown_function(static function (): void { echo "application, registered later\n"; });
+            PHP, $this->server()->baseUrl());
+        self::assertSame("application, registered first\napplication, registered later\nsent\n", $output);
+    }
+
+    public function testALongRunningInstanceIsClosedWhenTheProcessExits(): void
+    {
+        $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN]])]);
+        self::runScript(<<<'PHP'
+            $sightings = new Fingerly\AgentSightings([
+                'secret_key' => 'fly_sk_production_testonlysecret',
+                'client_ip' => static fn (Fingerly\Proxy\ProxyRequest $r): ?string => $r->remoteAddress,
+                'endpoint' => $argv[1],
+                'allow_insecure_loopback' => true,
+                'long_running' => true,
+            ]);
+            $sightings->report(new Fingerly\Proxy\ProxyRequest('GET', '/', ['user-agent' => 'last'], '', '192.0.2.1'), 'text/html');
+            // A worker stopping gracefully: its loop ends and the script returns.
+            PHP, $this->server()->baseUrl());
+        self::assertSame(1, $this->server()->requestCount());
+        self::assertSame('last', $this->sentItems(0)[0]['user_agent']);
     }
 
     public function testRequiresASecretKeyAndAClientIpCallback(): void
@@ -1264,6 +1387,29 @@ final class AgentSightingsTest extends TestCase
             usleep(25_000);
         }
         self::fail('the raw server never started listening');
+    }
+
+    /**
+     * Runs PHP code in its own CLI process with the SDK autoloaded, and
+     * answers what it printed.
+     */
+    private static function runScript(string $code, string ...$args): string
+    {
+        $script = '<?php require '.var_export(dirname(__DIR__).'/vendor/autoload.php', true).";\n".$code;
+        $file = (string) tempnam(sys_get_temp_dir(), 'fingerly-script');
+        file_put_contents($file, $script);
+
+        try {
+            $process = proc_open([\PHP_BINARY, '-d', 'apc.enable_cli=0', $file, ...array_values($args)], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            self::assertIsResource($process);
+            $output = (string) stream_get_contents($pipes[1]);
+            $errors = (string) stream_get_contents($pipes[2]);
+            self::assertSame(0, proc_close($process), $errors);
+
+            return $output;
+        } finally {
+            unlink($file);
+        }
     }
 
     private static function closedPort(): int

@@ -97,7 +97,7 @@ final class MemoryStore implements Store
         ];
     }
 
-    public function take(int $maxItems, int $maxBytes): array
+    public function take(int $maxItems, int $maxBytes, float $now): array
     {
         $batch = [];
         $bytes = 0;

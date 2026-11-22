@@ -87,6 +87,13 @@ final class AgentSightings
     /** How long an explicit flush waits for one already in flight, in seconds. */
     private const WAIT_FOR_FLIGHT = self::DEADLINE + 1.0;
 
+    /**
+     * An explicit flush starts no batch after this many seconds, so with the
+     * deadline it ends well before the 30 second APCu lock could expire
+     * under it, and a process exiting is never held for long.
+     */
+    private const FLUSH_BUDGET = 10.0;
+
     /** How often a throttled line may be logged, in seconds. */
     private const LOG_EVERY = 60.0;
 
@@ -109,6 +116,9 @@ final class AgentSightings
 
     /** @var array<string, float> when this process last logged each throttled line */
     private static array $loggedAt = [];
+
+    /** @var null|\WeakMap<self, true> the long-running instances closed when the process exits */
+    private static ?\WeakMap $closeOnExit = null;
 
     private readonly Agents $agents;
     private readonly ?Store $store;
@@ -219,11 +229,16 @@ final class AgentSightings
             $this->store = new MemoryStore($capacity);
         } elseif (Apcu::available()) {
             // One namespace per key and API, so two applications on one pool
-            // never read each other's answers.
-            $this->store = new ApcuStore(new Apcu(), $capacity, substr(hash('sha256', $origin.'/'.$apiVersion."\0".$secretKey), 0, 16));
+            // never read each other's answers, and per SDK version, so a
+            // deploy that keeps APCu never reads objects stored by another
+            // version's classes.
+            $this->store = new ApcuStore(new Apcu(), $capacity, substr(hash('sha256', Client::VERSION."\0".$origin.'/'.$apiVersion."\0".$secretKey), 0, 16));
         } else {
             $this->store = null;
             $this->logOnce('no-store', 'APCu is not available and long_running is off, so no request is reported and every lookup answers unknown');
+        }
+        if ($longRunning) {
+            $this->closeOnExit();
         }
     }
 
@@ -314,7 +329,9 @@ final class AgentSightings
      * oldest pending for 2 seconds, and sending not paused. Call it after the
      * response is written on a long-running server whose framework has no
      * adapter here (RoadRunner after `respond()`, for one). The Laravel and
-     * Symfony adapters call it after the response is sent.
+     * Symfony adapters do so from their terminate hooks when `long_running`
+     * is on. It sends one batch at most, so a slow API holds the worker for
+     * one deadline at most.
      */
     public function flushIfDue(): void
     {
@@ -334,8 +351,27 @@ final class AgentSightings
     }
 
     /**
+     * What the Laravel and Symfony adapters call once the response was sent.
+     * On a long-running server it sends a due batch, as
+     * {@see self::flushIfDue()} does. Anywhere else it does nothing: the
+     * report already arranged its send for after the response is finished,
+     * and sending here would hold the response open where the server cannot
+     * finish it first (the built-in server, Apache's module).
+     *
+     * @internal
+     */
+    public function responseSent(): void
+    {
+        if ($this->longRunning) {
+            $this->flushIfDue();
+        }
+    }
+
+    /**
      * Flushes once more and stops reporting; lookups keep answering from
-     * what is remembered.
+     * what is remembered. A `long_running` instance is closed this way when
+     * the process exits normally, so a worker that stops gracefully sends
+     * what it still holds.
      */
     public function close(): void
     {
@@ -429,15 +465,39 @@ final class AgentSightings
         }
 
         return static function (\Closure $flush): void {
+            // Registered again from inside the first shutdown function, so it
+            // runs after every shutdown function the application registers,
+            // even one registered later: finishing the response earlier would
+            // cut off whatever those still print.
             register_shutdown_function(static function () use ($flush): void {
-                if (\function_exists('fastcgi_finish_request')) {
-                    fastcgi_finish_request();
-                } elseif (\function_exists('litespeed_finish_request')) {
-                    litespeed_finish_request();
-                }
-                $flush();
+                register_shutdown_function(static function () use ($flush): void {
+                    if (\function_exists('fastcgi_finish_request')) {
+                        fastcgi_finish_request();
+                    } elseif (\function_exists('litespeed_finish_request')) {
+                        litespeed_finish_request();
+                    }
+                    $flush();
+                });
             });
         };
+    }
+
+    /**
+     * Closes this instance when the process exits normally, which is how a
+     * long-running worker stops gracefully. Held weakly, so an instance the
+     * application drops is never kept alive by this.
+     */
+    private function closeOnExit(): void
+    {
+        if (null === self::$closeOnExit) {
+            self::$closeOnExit = new \WeakMap();
+            register_shutdown_function(static function (): void {
+                foreach (self::$closeOnExit ?? [] as $sightings => $_) {
+                    $sightings->close();
+                }
+            });
+        }
+        self::$closeOnExit[$this] = true;
     }
 
     private function schedule(): void
@@ -490,18 +550,21 @@ final class AgentSightings
         $items = [];
 
         try {
-            // Every batch takes at least one item and the buffer holds at
-            // most 1000, so this ends; the bound only guards against a store
-            // that misbehaves.
-            for ($batch = 0; $batch <= Store::MAX_PENDING; ++$batch) {
+            // A due flush sends one batch: it runs after a response, on a
+            // worker the server is waiting to have back, and the next due
+            // response sends the next. An explicit flush sends batch after
+            // batch, but starts none once its budget is spent, so the lock
+            // is never held past its expiry while requests keep adding.
+            $started = ($this->now)();
+            for ($batch = 0; $everything ? $batch <= Store::MAX_PENDING : 0 === $batch; ++$batch) {
                 $now = ($this->now)();
-                if ($store->state()['resume_at'] > $now) {
+                if ($store->state()['resume_at'] > $now || $now - $started >= self::FLUSH_BUDGET) {
                     return;
                 }
                 if ($everything ? 0 === $store->pending()['items'] : !$this->due($now)) {
                     return;
                 }
-                $items = $store->take(self::FLUSH_ITEMS, self::FLUSH_BYTES);
+                $items = $store->take(self::FLUSH_ITEMS, self::FLUSH_BYTES, $now);
                 if ([] === $items) {
                     $store->settle([]);
 
@@ -587,13 +650,16 @@ final class AgentSightings
             return false;
         } catch (TimeoutException $e) {
             if ($e->requestSent) {
-                // The API may have counted it; sending it again would count twice.
+                // The API may have counted it; sending it again would count
+                // twice. Sending still backs off: an API that does not answer
+                // would otherwise hold a worker for the whole deadline every
+                // time a send comes due.
                 $store->settle($items);
                 $this->logThrottled($store, 'invalid_logged_at', 'a report timed out after it was sent; the batch was dropped');
             } else {
                 $store->putBack($items);
-                $this->backOff($store);
             }
+            $this->backOff($store);
 
             return false;
         } catch (ConnectionException $e) {
@@ -603,9 +669,11 @@ final class AgentSightings
                 $this->logThrottled($store, 'invalid_logged_at', 'the API answered a report with an oversized body; the batch was dropped');
             } elseif ($e->requestWritten) {
                 // Closed, reset or cut short once the report was written: the
-                // API may have counted it, as after a timeout.
+                // API may have counted it, as after a timeout, and sending
+                // backs off as after one.
                 $store->settle($items);
                 $this->logThrottled($store, 'invalid_logged_at', 'the connection failed after a report was sent; the batch was dropped');
+                $this->backOff($store);
             } else {
                 $store->putBack($items);
                 $this->backOff($store);

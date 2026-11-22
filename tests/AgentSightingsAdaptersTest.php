@@ -137,15 +137,61 @@ final class AgentSightingsAdaptersTest extends TestCase
         self::assertSame(1, $this->server()->requestCount(), 'the base path is not part of the matched path');
     }
 
-    public function testLaravelFlushesADueBatchFromTerminate(): void
+    public function testLaravelFlushesADueBatchFromTerminateWhenLongRunning(): void
     {
-        $sightings = $this->sightings();
+        $sightings = $this->sightings(null, ['long_running' => true]);
         $middleware = new LaravelMiddleware($sightings);
         $middleware->terminate(self::laravel('/'), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
         self::assertSame(0, $this->server()->requestCount());
         $this->now += 2;
         $middleware->terminate(self::laravel('/'), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
         self::assertSame(1, $this->server()->requestCount());
+        self::assertSame(2, $this->sentItems()[0]['count']);
+        self::assertSame([], $this->deferred, 'a long-running server sends from terminate, not at shutdown');
+    }
+
+    public function testSymfonyFlushesADueBatchOnKernelTerminateWhenLongRunning(): void
+    {
+        $sightings = $this->sightings(null, ['long_running' => true]);
+        $listener = new SymfonyListener($sightings);
+        $listener->onKernelTerminate(self::terminateEvent('/'));
+        $this->now += 2;
+        $listener->onKernelTerminate(self::terminateEvent('/'));
+        self::assertSame(1, $this->server()->requestCount());
+    }
+
+    public function testTerminateNeverSendsWhenTheServerHoldsTheResponseOpen(): void
+    {
+        // Laravel and Symfony run terminate after send(), but only PHP-FPM
+        // and LiteSpeed have finished the response by then. Under the
+        // built-in server or Apache's module the client is still waiting,
+        // so a due batch must not be sent from there.
+        $sightings = $this->sightings(['status' => 200, 'body' => $this->answerBody(1), 'delay' => 3.0]);
+        $sightings->deferUsing(null);
+        $laravel = new LaravelMiddleware($sightings);
+        $symfony = new SymfonyListener($sightings);
+
+        $started = microtime(true);
+        $laravel->terminate(self::laravel('/'), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
+        $this->now += 2;
+        $laravel->terminate(self::laravel('/'), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
+        $symfony->onKernelTerminate(self::terminateEvent('/'));
+        self::assertLessThan(1.0, microtime(true) - $started, 'terminate adds no network wait');
+        self::assertSame(0, $this->server()->requestCount());
+    }
+
+    public function testUnderPhpFpmADueBatchIsSentOnceTheResponseIsFinished(): void
+    {
+        $sightings = $this->sightings();
+        $middleware = new LaravelMiddleware($sightings);
+        $middleware->terminate(self::laravel('/'), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
+        $this->now += 2;
+        $middleware->terminate(self::laravel('/'), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
+        self::assertSame(0, $this->server()->requestCount(), 'not from terminate');
+        self::assertCount(1, $this->deferred, 'but after the response is finished');
+        foreach ($this->deferred as $flush) {
+            $flush();
+        }
         self::assertSame(2, $this->sentItems()[0]['count']);
     }
 
@@ -246,6 +292,18 @@ final class AgentSightingsAdaptersTest extends TestCase
     private static function laravel(string $path): LaravelRequest
     {
         return LaravelRequest::create($path, 'GET', [], [], [], self::serverVars());
+    }
+
+    private static function terminateEvent(string $path): TerminateEvent
+    {
+        $kernel = new class implements HttpKernelInterface {
+            public function handle(SymfonyRequest $request, int $type = self::MAIN_REQUEST, bool $catch = true): SymfonyResponse
+            {
+                return new SymfonyResponse();
+            }
+        };
+
+        return new TerminateEvent($kernel, SymfonyRequest::create($path, 'GET', [], [], [], self::serverVars()), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
     }
 
     private static function handler(ResponseInterface $response): RequestHandlerInterface

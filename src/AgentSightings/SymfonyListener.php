@@ -23,8 +23,11 @@ use Symfony\Component\HttpKernel\KernelEvents;
  * ```
  *
  * It listens on `kernel.terminate`, which runs after the response was sent
- * (under PHP-FPM, after it was finished), reports the response there and
- * sends a due batch, under RoadRunner and Swoole runtimes too. Paths are
+ * (under PHP-FPM, after it was finished), and reports the response there.
+ * Under RoadRunner and Swoole runtimes (`long_running`) a due batch is sent
+ * from there; under PHP-FPM it is sent once the response is finished; and
+ * where the server cannot finish a response before the script ends (the
+ * built-in server, Apache's module), it is never sent on a request. Paths are
  * matched against `$request->getPathInfo()`, the path relative to the
  * application.
  *
@@ -48,7 +51,7 @@ final class SymfonyListener implements EventSubscriberInterface
             self::toProxyRequest($event->getRequest()),
             (string) $event->getResponse()->headers->get('content-type', ''),
         );
-        $this->sightings->flushIfDue();
+        $this->sightings->responseSent();
     }
 
     /** What Fingerly said sent this request; see {@see AgentSightings::lookup()}. */

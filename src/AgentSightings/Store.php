@@ -54,7 +54,7 @@ interface Store
      *
      * @return list<Pending>
      */
-    public function take(int $maxItems, int $maxBytes): array;
+    public function take(int $maxItems, int $maxBytes, float $now): array;
 
     /**
      * Returns the batch in flight to the front of the buffer as its oldest

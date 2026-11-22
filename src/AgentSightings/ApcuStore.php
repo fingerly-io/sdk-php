@@ -32,6 +32,15 @@ final class ApcuStore implements Store
     private const ITEM_TTL = 86400;
     private const LOCK_TTL = 30;
 
+    /**
+     * How long a queue number may stay unwritten before it is skipped, in
+     * seconds. The request that numbered it writes it within microseconds;
+     * one still unwritten after this never will be, because the worker died
+     * in between or APCu expired or evicted the entry (a day without a
+     * flush, for one).
+     */
+    private const GAP_WAIT = 5.0;
+
     private readonly string $prefix;
 
     /**
@@ -119,7 +128,7 @@ final class ApcuStore implements Store
         ];
     }
 
-    public function take(int $maxItems, int $maxBytes): array
+    public function take(int $maxItems, int $maxBytes, float $now): array
     {
         $head = $this->apcu->fetch($this->prefix.'phead');
         $head = is_int($head) ? $head : 1;
@@ -128,13 +137,23 @@ final class ApcuStore implements Store
 
         $batch = [];
         $bytes = 0;
+        $skipped = false;
         $seq = $head;
         for (; $seq <= $tail && count($batch) < $maxItems; ++$seq) {
             $id = $this->apcu->fetch($this->prefix.'q:'.$seq);
             if (!is_string($id)) {
-                // Numbered but not written yet by the request adding it: stop
-                // here and read it next time rather than lose it.
-                break;
+                if (!$this->gapExpired($seq, $tail, $now)) {
+                    // Numbered but not written yet by the request adding it:
+                    // stop here and read it next time rather than lose it.
+                    break;
+                }
+                // Still unwritten long after it was numbered, so it never
+                // will be: skip it rather than stop reporting for good. It
+                // was counted when it was numbered.
+                $this->apcu->inc($this->prefix.'pn', -1);
+                $skipped = true;
+
+                continue;
             }
             $item = $this->item($id);
             if (null === $item || $item[2] !== $seq) {
@@ -157,6 +176,11 @@ final class ApcuStore implements Store
             }
         }
         $this->apcu->store($this->prefix.'phead', $seq);
+        if ($skipped && $seq > $tail) {
+            // Nothing is queued any more, so no bytes are pending; a skipped
+            // item's bytes cannot be known and would otherwise count forever.
+            $this->apcu->store($this->prefix.'pb', 0);
+        }
         $this->resetOldest($seq, $tail);
         // One batch is in flight at a time and only its flusher writes this.
         // It expires with the lock, so a worker that died mid-flush cannot
@@ -270,6 +294,26 @@ final class ApcuStore implements Store
         }
 
         return [$item[0], $item[1], $item[2]];
+    }
+
+    /**
+     * Whether queue number $seq has stayed unwritten for {@see self::GAP_WAIT}.
+     *
+     * The first unwritten number seen is recorded with the time and the
+     * highest number given out then; any unwritten number in that range was
+     * numbered before that time, so a run of lost entries is skipped in one
+     * pass once the wait is over.
+     */
+    private function gapExpired(int $seq, int $tail, float $now): bool
+    {
+        $gap = $this->apcu->fetch($this->prefix.'gap');
+        if (is_array($gap) && is_int($gap[0] ?? null) && is_float($gap[1] ?? null) && is_int($gap[2] ?? null)
+            && $seq >= $gap[0] && $seq <= $gap[2]) {
+            return $now - $gap[1] >= self::GAP_WAIT;
+        }
+        $this->apcu->store($this->prefix.'gap', [$seq, $now, $tail], self::ITEM_TTL);
+
+        return false;
     }
 
     /** Reads an integer and sets it to 0 in one step, so no increment is lost. */

@@ -24,9 +24,12 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * It does nothing while the request is handled. The report is made in
  * `terminate()`, which Laravel calls after the response was sent (under
- * PHP-FPM, after it was finished), and a due batch is sent from there, under
- * Octane too. Paths are matched against `$request->getPathInfo()`, the path
- * relative to the application.
+ * PHP-FPM, after it was finished). Under Octane (`long_running`) a due batch
+ * is sent from there; under PHP-FPM it is sent once the response is
+ * finished; and where the server cannot finish a response before the script
+ * ends (`php artisan serve`, Apache's module), it is never sent on a request.
+ * Paths are matched against `$request->getPathInfo()`, the path relative to
+ * the application.
  *
  * Requires `illuminate/http`, which is a suggest rather than a dependency.
  */
@@ -45,7 +48,7 @@ final class LaravelMiddleware
     public function terminate(Request $request, Response $response): void
     {
         $this->sightings->report(self::toProxyRequest($request), (string) $response->headers->get('content-type', ''));
-        $this->sightings->flushIfDue();
+        $this->sightings->responseSent();
     }
 
     /** What Fingerly said sent this request; see {@see AgentSightings::lookup()}. */
