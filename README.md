@@ -287,10 +287,10 @@ $result = $fingerly->events->verify($requestId, [
     'tag' => 'checkout',
     'max_age_seconds' => 300,
 ]);
-if (!$result->ok) {
+$event = $result->event;
+if (!$result->ok || null === $event) {
     return 'refuse'; // $result->reason says why
 }
-$event = $result->event;
 if (\Fingerly\SuspectLevel::HIGH === $event->suspectLevel) {
     return 'review';
 }
@@ -763,17 +763,35 @@ framework. Each one reports after your application answered and hands the
 response back untouched:
 
 ```php
-// Laravel: bind it as a singleton in a service provider, then in bootstrap/app.php
+// Laravel: one instance per process, bound in a service provider's register()
+$this->app->singleton(\Fingerly\AgentSightings::class, fn () => new \Fingerly\AgentSightings([
+    'secret_key' => config('services.fingerly.secret_key'),
+    'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: $r->remoteAddress,
+]));
+
+// Laravel, in bootstrap/app.php
 $middleware->append(\Fingerly\AgentSightings\LaravelMiddleware::class);
 
 // Slim, Mezzio and other PSR-15 stacks
 $app->add(new \Fingerly\AgentSightings\Psr15Middleware($sightings));
 ```
 
+Under Octane, pass `'long_running' => true` and add
+`\Fingerly\AgentSightings::class` to `warm` in `config/octane.php`, next to the
+proxy and the client. A singleton that is not warmed is built again for every
+request, so it would remember nothing and report nothing.
+
 ```yaml
-# Symfony, config/services.yaml
-Fingerly\AgentSightings\SymfonyListener:
-    arguments: ['@fingerly.agent_sightings']
+# Symfony, config/services.yaml, with the ClientIp class from the proxy section
+    fingerly.agent_sightings:
+        class: Fingerly\AgentSightings
+        arguments:
+            - secret_key: '%env(FINGERLY_SECRET_KEY)%'
+              client_ip: ['@App\Fingerly\ClientIp', '__invoke']
+              on_error: ['@logger', 'warning']
+
+    Fingerly\AgentSightings\SymfonyListener:
+        arguments: ['@fingerly.agent_sightings']
 ```
 
 Laravel reports from its `terminate()` hook and Symfony on `kernel.terminate`,
@@ -841,16 +859,23 @@ reported; a Web Bot Auth header over 4096 bytes is left out.
 | --- | --- |
 | Answers remembered | 4096 by default (`capacity`; a larger value is held to 65536), least recently used dropped first, each for the `ttl` Fingerly gave, a day at most. About 1.5 MB at the default, about 25 MB at the most. When Fingerly's rules change, every remembered answer is dropped. |
 | Pending reports | At most 1000, the batch being sent included. Repeats of the same request are one report with a count, cache hits included, so the console counts them; signed requests are never folded. When the buffer is full, a new request is not reported and `droppedCount()` goes up. |
-| Sending | Up to 200 reports per call, when 200 or 64 KiB are pending or 2 seconds after the oldest, at most one call at a time, each with a 5 second deadline. Never on the request being served. |
-| Failures | Requests are served as usual and `lookup()` keeps answering. A rate limit keeps the reports until `Retry-After` has passed, a second at least; a wrong or revoked key drops them and pauses sending for a minute; a `503` or a network error before any answer keeps them and retries with backoff from 1 to 60 seconds; a call that timed out, or whose connection failed, after it was sent is dropped rather than counted twice; any other answer drops them. A failure is logged at most once a minute, and no log line holds a reported field. |
+| Sending | Up to 200 reports per call, when 200 or 64 KiB are pending or 2 seconds after the oldest, at most one call at a time, each with a 5 second deadline. A due send after a response makes one call, so a slow API holds a worker for one deadline at most; `flush()` starts no call after 10 seconds. Never on the request being served. |
+| Failures | Requests are served as usual and `lookup()` keeps answering. A rate limit keeps the reports until `Retry-After` has passed, a second at least; a wrong or revoked key drops them and pauses sending for a minute; a `503` or a network error before any answer keeps them and retries with backoff from 1 to 60 seconds; a call that timed out, or whose connection failed, after it was sent is dropped rather than counted twice, and sending backs off the same way; any other answer drops them. A failure is logged at most once a minute, and no log line holds a reported field. |
 
 Under **PHP-FPM** the cache and the pending reports live in APCu, shared by
 the pool's workers and held to the same bounds. The request that makes a send
 due registers it to run after `fastcgi_finish_request()` (or LiteSpeed's
-equivalent), and one worker at a time sends, under an `apcu_add` lock. Without
-APCu, and without `long_running`, nothing is reported, every `lookup()` answers
-unknown, and that is logged once. APCu is approximate about recency: an answer
-in use is kept by storing it again, rather than by an exact LRU.
+equivalent), after every shutdown function of your own, and one worker at a
+time sends, under an `apcu_add` lock. Without APCu, and without
+`long_running`, nothing is reported, every `lookup()` answers unknown, and that
+is logged once. APCu is approximate about recency: an answer in use is kept by
+storing it again, rather than by an exact LRU. The pending reports live as long
+as the pool: a restart of PHP-FPM loses those not sent yet.
+
+The built-in server (`php -S`, `php artisan serve`) and Apache's module keep
+the response open until the script ends, so nothing is sent after a response
+there, and that is logged once; reports are sent only by an explicit
+`flush()`. Run PHP-FPM, LiteSpeed or a long-running server to report.
 
 On a **long-running server** (Octane, RoadRunner, Swoole, FrankenPHP worker
 mode, a queue worker) pass `'long_running' => true`: both live in the process,
@@ -858,6 +883,8 @@ and the Laravel and Symfony adapters send due reports from their terminate
 hooks. Elsewhere, call `$sightings->flushIfDue()` after each response is
 written, for example after RoadRunner's `respond()`. A PHP process has no
 timer, so the 2 second rule is checked when the next response is reported.
+A `long_running` instance is closed when the process exits normally, which is
+how these servers stop a worker, so what it still holds is sent then.
 
 `$sightings->flush()` sends everything pending now, for a script or a worker
 that is about to exit, and `$sightings->close()` flushes once more and stops
