@@ -28,7 +28,8 @@ use Fingerly\Proxy\ProxyResponse;
  * $proxy = new \Fingerly\Proxy([
  *     'proxy_key' => getenv('FINGERLY_PROXY_KEY'),
  *     'path' => '/k7x2qm4a',
- *     'client_ip' => fn (ProxyRequest $r) => $r->header('cf-connecting-ip'),
+ *     // A trusted edge header, else the TCP peer; never X-Forwarded-For.
+ *     'client_ip' => fn (\Fingerly\Proxy\ProxyRequest $r) => $r->header('cf-connecting-ip') ?: $r->remoteAddress,
  * ]);
  * $proxy->handle(ProxyRequest::fromGlobals())->send();
  * ```
@@ -143,7 +144,7 @@ final class Proxy
     /**
      * @param array<string, mixed> $options `proxy_key` and `client_ip` are required; `client_ip`
      *                                      is a `callable(ProxyRequest): string`. The rest are
-     *                                      `path`, `api_version`, `upstream` (a bare HTTPS origin),
+     *                                      `path`, `allowed_origins`, `api_version`, `upstream` (a bare HTTPS origin),
      *                                      `allow_insecure_loopback` (true lets `upstream` be
      *                                      plain HTTP on 127.0.0.1, localhost or [::1] for a
      *                                      local test harness), `max_body_bytes`,

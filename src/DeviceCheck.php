@@ -5,24 +5,24 @@ declare(strict_types=1);
 namespace Fingerly;
 
 /**
- * Spends the DeviceCheck token held for an iOS event, once, to read or to
- * write the device's two Apple DeviceCheck bits.
+ * Spends the DeviceCheck tokens held for an iOS event, each once, to read and
+ * to write the device's two Apple DeviceCheck bits.
  *
  * Reached as `$fingerly->deviceCheck`; it is never constructed directly.
  *
- * Apple treats each token as single-use, so one event pays for one call: a
- * read or a write, never both. To read and then mark a device, read on one
- * identification and write on the next. Tokens are held for one hour.
+ * Apple treats each token as single-use, so an event holds one token for a
+ * read and another for a write: to read and then mark a device, read and
+ * write on the same identification. Tokens are held for one hour.
  *
  * A `503 device_check_unavailable`, a timeout or a connection failure keeps
  * the token, and the SDK retries the identical request on its own. Apple
- * allows a token to be retried only for the same request, so a later call on
- * the same event with the other operation or other bits answers
+ * allows a token to be retried only for the same request, so a second read,
+ * or a write with other bits, on the same event answers
  * `409 device_check_spent`.
  *
  * ```php
  * $bits = $fingerly->deviceCheck->query($requestId);
- * $fingerly->deviceCheck->write($nextRequestId, ['bit0' => true]);
+ * $fingerly->deviceCheck->write($requestId, ['bit0' => true]);
  * ```
  */
 final class DeviceCheck

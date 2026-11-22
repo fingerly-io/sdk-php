@@ -382,22 +382,20 @@ kept, and redirects are never followed.
 ## Apple DeviceCheck bits
 
 For an iOS identification whose App Attest evidence carried a DeviceCheck
-token, Fingerly holds the token for one hour, and your backend spends it once
-to read or to write the device's two Apple DeviceCheck bits. The bits mean what
-you decide; Fingerly never reads them.
+token, Fingerly holds two tokens for one hour, one to read and one to write
+the device's two Apple DeviceCheck bits, and your backend spends each once.
+The bits mean what you decide; Fingerly never reads them.
 
-Apple treats each token as single-use, so one identification pays for one
-call: a read or a write, never both. A "check, then mark" flow such as a
-once-per-device free trial therefore spends two identifications:
+Apple treats each token as single-use, so one identification supports one
+read and one write. A "check, then mark" flow such as a once-per-device free
+trial does both on the identification that asks for the trial:
 
-1. Query on the identification that asks for the trial. If the bits say the
-   device already had one, refuse it.
-2. Otherwise record the grant in your own data, then write the bit on the next
-   identification from that install. Until the write lands, your own record is
-   what stops a second trial.
+1. Query the bits. If they say the device already had a trial, refuse it.
+2. Otherwise record the grant in your own data, then write the bit on the same
+   identification. Until the write lands, your own record is what stops a
+   second trial.
 
 ```php
-// 1. The identification that asks for the trial.
 try {
     $bits = $fingerly->deviceCheck->query($requestId);
     $usedOnDevice = $bits->found && $bits->bit0;
@@ -408,8 +406,10 @@ try {
     $usedOnDevice = false; // no answer, not a verdict
 }
 
-// 2. The next identification, once the trial is granted in your own data.
-$fingerly->deviceCheck->write($nextRequestId, ['bit0' => true]);
+if (!$usedOnDevice) {
+    // Grant the trial in your own data, then mark the device.
+    $fingerly->deviceCheck->write($requestId, ['bit0' => true]);
+}
 ```
 
 A bit left out of a write keeps its value; a write must name `bit0`, `bit1` or
@@ -418,8 +418,8 @@ both, or it throws `ConfigurationException` before anything is sent.
 A `503 device_check_unavailable`, a timeout or a connection failure keeps the
 token, and the SDK sends the identical request again, twice at most. Nothing
 else is retried. Apple allows a token to be retried only for the same request,
-so if you retry yourself, repeat the same call with the same bits: another
-operation or other bits on that event answer `409 device_check_spent`.
+so if you retry yourself, repeat the same call with the same bits: a second
+read, or a write with other bits, on that event answers `409 device_check_spent`.
 
 `ApiException` tells the answers apart: `isDeviceCheckNotHeld()` (`404`),
 `isDeviceCheckSpent()`, `isDeviceCheckBusy()` and `isCredentialUnavailable()`
@@ -698,12 +698,15 @@ trailing slash and no `.` or `..` segment; anything else is a
 
 The three adapters see every request, so each one refuses a `Proxy` without a
 `path` rather than answer them all, and there is no default to fall back on.
-The path is matched against the application-relative path: `getPathInfo()`
-under Laravel and Symfony, and the PSR-7 URI path under PSR-15. It is never the
-whole request URI, because a deployment under a sub-URI carries a prefix the
-configuration knows nothing about, and a spelled-out front controller such as
-`/index.php/k7x2qm4a` is not the path. Add the PSR-15 middleware to the whole
-application or to that one route, not under a path your router strips.
+Under Laravel and Symfony the path is matched against the application-relative
+path, `getPathInfo()`, never the whole request URI, because a deployment under
+a sub-URI carries a prefix the configuration knows nothing about, and a
+spelled-out front controller such as `/index.php/k7x2qm4a` is not the path.
+Under PSR-15 it is matched against the request path exactly as the client sent
+it (`REQUEST_URI` without the query string, else the PSR-7 URI path), because
+some PSR-7 implementations normalise the URI they build. Add the PSR-15
+middleware to the whole application or to that one route, not under a path
+your router strips.
 
 Use the path the dashboard issued. Blockers look for words such as
 `fingerprint`, `tracking`, `analytics`, `collect`, `identify` and `fingerly`.
@@ -835,8 +838,9 @@ checked every time and never remembered, so `lookup()` answers unknown for it.
 By default, every response with a `Content-Type` of `text/html` or
 `application/xhtml+xml`, and every request for `/robots.txt`, `/llms.txt` and
 `/llms-full.txt`, whatever their status. Static assets, API routes and health
-checks are not. Paths are the application-relative path the proxy also
-matches, without the query string.
+checks are not. Paths are compared without the query string: the
+application-relative `getPathInfo()` under Laravel and Symfony, the PSR-7 URI
+path under PSR-15.
 
 | Option | Effect |
 | --- | --- |
