@@ -22,6 +22,28 @@ use Psr\Http\Client\ClientExceptionInterface;
  */
 final class Psr18Test extends TestCase
 {
+    public function testRefusesAClientOrFactoryItCannotUse(): void
+    {
+        $http = new CannedPsr18Client(new Response(200, [], '{}'));
+        $factory = new Psr17Factory();
+        foreach ([
+            ['http_client' => 'guzzle', 'request_factory' => $factory],
+            ['http_client' => new \stdClass(), 'request_factory' => $factory],
+            ['http_client' => $http, 'request_factory' => new \stdClass()],
+            ['http_client' => $http, 'request_factory' => $factory, 'stream_factory' => 'factory'],
+            ['request_factory' => $factory],
+            ['stream_factory' => $factory],
+        ] as $options) {
+            try {
+                new Client(TestServer::SECRET_KEY, $options);
+                self::fail('accepted '.json_encode(array_map(get_debug_type(...), $options)));
+            } catch (ConfigurationException $e) {
+                self::assertNotSame('', $e->getMessage());
+            }
+        }
+        self::assertSame([], $http->sent);
+    }
+
     public function testAReadGoesThroughTheSuppliedClient(): void
     {
         $http = new CannedPsr18Client(new Response(200, [], '{"rows":[],"page":1,"page_size":5}'));

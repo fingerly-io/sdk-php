@@ -27,12 +27,16 @@ namespace Fingerly;
  */
 class ApiException extends \RuntimeException implements FingerlyException
 {
+    /** {@see self::getRateLimitScope()} for the organization's daily allowance. */
+    public const RATE_LIMIT_SCOPE_DAILY = 'daily';
+
     /**
-     * @param int         $status     the HTTP status code
-     * @param null|string $errorCode  stable machine-readable code, such as `event_not_found`
-     * @param mixed       $details    additional context; its shape depends on the code
-     * @param null|string $requestId  server-side trace id to quote in support requests
-     * @param null|int    $retryAfter seconds the API asked the caller to wait, from Retry-After
+     * @param int         $status         the HTTP status code
+     * @param null|string $errorCode      stable machine-readable code, such as `event_not_found`
+     * @param mixed       $details        additional context; its shape depends on the code
+     * @param null|string $requestId      server-side trace id to quote in support requests
+     * @param null|int    $retryAfter     seconds the API asked the caller to wait, from Retry-After
+     * @param null|string $rateLimitScope which limit refused a `429`, from Fingerly-RateLimit-Scope
      */
     public function __construct(
         private readonly int $status,
@@ -40,6 +44,7 @@ class ApiException extends \RuntimeException implements FingerlyException
         private readonly mixed $details = null,
         private readonly ?string $requestId = null,
         private readonly ?int $retryAfter = null,
+        private readonly ?string $rateLimitScope = null,
     ) {
         parent::__construct(
             null === $errorCode
@@ -90,6 +95,17 @@ class ApiException extends \RuntimeException implements FingerlyException
     public function getRetryAfter(): ?int
     {
         return $this->retryAfter;
+    }
+
+    /**
+     * Which limit refused a `429`, from its `Fingerly-RateLimit-Scope` header,
+     * or null when it named none. {@see self::RATE_LIMIT_SCOPE_DAILY} is the
+     * organization's daily allowance, which usually lasts until the next UTC
+     * day.
+     */
+    public function getRateLimitScope(): ?string
+    {
+        return $this->rateLimitScope;
     }
 
     /**

@@ -113,10 +113,10 @@ final class Config
      *
      * @throws ConfigurationException
      */
-    public static function normalizeApiVersion(?string $version): string
+    public static function normalizeApiVersion(#[\SensitiveParameter] mixed $version): string
     {
         $version ??= 'v1';
-        if (1 !== preg_match(self::API_VERSION_PATTERN, $version)) {
+        if (!is_string($version) || 1 !== preg_match(self::API_VERSION_PATTERN, $version)) {
             throw new ConfigurationException('api_version must be a version such as "v1" or "v2"');
         }
 
@@ -128,7 +128,7 @@ final class Config
      *
      * @throws ConfigurationException
      */
-    public static function positiveNumber(mixed $value, string $name): float
+    public static function positiveNumber(#[\SensitiveParameter] mixed $value, string $name): float
     {
         if (!is_int($value) && !is_float($value)) {
             throw new ConfigurationException(sprintf('%s must be a number', $name));
@@ -145,7 +145,7 @@ final class Config
      *
      * @throws ConfigurationException
      */
-    public static function positiveInt(mixed $value, string $name): int
+    public static function positiveInt(#[\SensitiveParameter] mixed $value, string $name): int
     {
         if (!is_int($value) || $value <= 0) {
             throw new ConfigurationException(sprintf('%s must be a positive integer', $name));
@@ -163,7 +163,7 @@ final class Config
      *
      * @throws ConfigurationException
      */
-    public static function normalizePath(mixed $value): string
+    public static function normalizePath(#[\SensitiveParameter] mixed $value): string
     {
         $path = is_string($value) ? $value : '';
         $segments = explode('/', substr($path, 1));

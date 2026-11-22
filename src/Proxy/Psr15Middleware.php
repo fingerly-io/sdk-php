@@ -22,8 +22,9 @@ use Psr\Http\Server\RequestHandlerInterface;
  * ```
  *
  * The {@see Proxy} must be given the `path` the dashboard issued. It is
- * matched against the PSR-7 URI path, so add the middleware to the whole
- * application rather than piping it under that path, which would strip it.
+ * matched against the request path as the client sent it (`REQUEST_URI`,
+ * else the PSR-7 URI path), so add the middleware to the whole application
+ * rather than piping it under that path, which would strip it.
  *
  * Requires `psr/http-server-middleware`, which is a suggest rather than a
  * dependency: a build that only reads events needs none of it.

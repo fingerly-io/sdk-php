@@ -12,7 +12,9 @@ namespace Fingerly;
  */
 final class Events
 {
-    private const LIST_OPTIONS = ['from', 'to', 'page', 'limit', 'visitor', 'level'];
+    private const LIST_OPTIONS = [
+        'from', 'to', 'page', 'limit', 'visitor', 'level', 'kind', 'ai_provider', 'ai_purpose',
+    ];
 
     private const VERIFY_OPTIONS = ['max_age_seconds', 'tag', 'consume'];
 
@@ -185,12 +187,16 @@ final class Events
      * @param array<string, mixed> $query `from` and `to` bound the window and take a
      *                                    `DateTimeInterface` or an RFC 3339 string; `page` and
      *                                    `limit` are positive integers; `visitor` is one exact
-     *                                    visitor id and `level` one of `low`, `medium`, `high`.
-     *                                    It is deliberately not a shape: filters routinely come
+     *                                    visitor id and `level` one of `low`, `medium`, `high`;
+     *                                    `kind` is one visitor kind ({@see VisitorKind}),
+     *                                    `ai_provider` one AI operator exactly as events name it
+     *                                    (case-sensitive, such as `OpenAI`) and `ai_purpose` one
+     *                                    {@see AiPurpose}. The server rejects an unknown kind or
+     *                                    purpose. It is deliberately not a shape: filters routinely come
      *                                    from a query string or a config file, where every value
      *                                    is `mixed`, and validating them here is the point.
      *
-     * @throws ConfigurationException if a date, page or limit is not usable
+     * @throws ConfigurationException if a date, page or limit is not usable, or a filter is not a string
      * @throws ApiException
      * @throws TimeoutException
      * @throws ConnectionException
@@ -212,11 +218,15 @@ final class Events
         if (isset($query['limit'])) {
             $params['limit'] = (string) Config::positiveInt($query['limit'], 'limit');
         }
-        if (isset($query['visitor'])) {
-            $params['visitor'] = (string) $query['visitor'];
-        }
-        if (isset($query['level'])) {
-            $params['level'] = (string) $query['level'];
+        foreach (['visitor', 'level', 'kind', 'ai_provider', 'ai_purpose'] as $filter) {
+            if (isset($query[$filter])) {
+                if (!is_string($query[$filter])) {
+                    // An array from `?visitor[]=`, say, rather than a PHP
+                    // warning or a filter the caller never meant.
+                    throw new ConfigurationException(sprintf('%s must be a string', $filter));
+                }
+                $params[$filter] = $query[$filter];
+            }
         }
 
         $path = '/events';

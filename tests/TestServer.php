@@ -114,6 +114,11 @@ final class TestServer
         return $requests[0];
     }
 
+    /**
+     * How many requests arrived so far; it changes as the server is used.
+     *
+     * @phpstan-impure
+     */
     public function requestCount(): int
     {
         return count($this->requests());

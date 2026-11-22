@@ -14,14 +14,18 @@ namespace Fingerly;
 final class ConnectionException extends \RuntimeException implements FingerlyException
 {
     /**
-     * @param string $message the failure, with the key stripped
-     * @param string $kind    one short word for the failure that names no host or
-     *                        URL: `connect`, `dns`, `tls`, `connection_lost`,
-     *                        `too_large`, `client` or `other`, for a log line that
-     *                        must not disclose
-     *                        where the request was going
+     * @param string $message        the failure, with the key stripped
+     * @param string $kind           one short word for the failure that names no host or
+     *                               URL: `connect`, `dns`, `tls`, `connection_lost`,
+     *                               `too_large`, `client` or `other`, for a log line that
+     *                               must not disclose
+     *                               where the request was going
+     * @param bool   $requestWritten whether the whole request had been written
+     *                               before the connection failed, so the server
+     *                               may have acted on it; false when it cannot
+     *                               be told
      */
-    public function __construct(string $message, public readonly string $kind = 'other')
+    public function __construct(string $message, public readonly string $kind = 'other', public readonly bool $requestWritten = false)
     {
         parent::__construct($message);
     }

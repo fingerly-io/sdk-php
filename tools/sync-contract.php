@@ -16,6 +16,12 @@ declare(strict_types=1);
  */
 const FILES = ['openapi.json', 'fixtures.json'];
 
+/**
+ * Contract files the manifest records no hash for, copied as they are: the
+ * agent sightings cache-key vectors, which `AgentSightingsTest` reproduces.
+ */
+const UNHASHED_FILES = ['agent-sightings-vectors.json'];
+
 exit(main());
 
 function main(): int
@@ -41,6 +47,11 @@ function main(): int
             if (($manifest['files'][$name] ?? null) !== $actual) {
                 throw new RuntimeException(sprintf('invalid contract hash for %s: %s', $name, $actual));
             }
+            $staged[$name] = $content;
+        }
+        foreach (UNHASHED_FILES as $name) {
+            $content = read($source.'/'.$name);
+            json_decode($content, true, 32, \JSON_THROW_ON_ERROR);
             $staged[$name] = $content;
         }
 

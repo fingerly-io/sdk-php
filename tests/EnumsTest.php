@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Fingerly\Tests;
 
+use Fingerly\AiPurpose;
+use Fingerly\AiRuntime;
+use Fingerly\AiVerificationMethod;
+use Fingerly\AiVerificationResult;
 use Fingerly\AnonymityNetwork;
 use Fingerly\AttestationState;
 use Fingerly\AttestationStatus;
@@ -102,13 +106,14 @@ final class EnumsTest extends TestCase
             'device_inconsistent',
             'tor', 'proxy', 'residential_proxy', 'residential_proxy_low_confidence',
             'residential_proxy_medium_confidence', 'residential_proxy_high_confidence',
-            'vpn_public', 'vpn_timezone', 'vpn_relay', 'vpn_mobile', 'vpn_os_mismatch',
+            'vpn_public', 'vpn_relay', 'vpn_mobile', 'vpn_os_mismatch',
             'vpn_low_confidence', 'vpn_medium_confidence', 'vpn_high_confidence',
             'ip_blocklist_email_spam', 'ip_blocklist_attack_source', 'ip_abuser', 'datacenter_ip',
             'bogon_ip', 'anycast_ip',
-            'incognito', 'bad_bot', 'automation', 'fetch_metadata_missing', 'web_ticket_missing',
-            'web_ticket_invalid', 'antidetect_browser', 'virtual_machine', 'fingerprint_suppressed',
-            'privacy_settings', 'embedded_web_view', 'remote_control',
+            'incognito', 'bad_bot', 'ai_spoofed', 'automation', 'fetch_metadata_missing',
+            'web_ticket_missing', 'web_ticket_invalid', 'antidetect_browser', 'virtual_machine',
+            'fingerprint_suppressed', 'identity_obfuscated', 'privacy_settings', 'embedded_web_view',
+            'remote_control',
             'emulator', 'root_apps', 'app_cloner', 'jailbreak', 'simulator', 'frida', 'mitm_attack',
             'active_call', 'attestation_missing', 'attestation_downgrade', 'repeated_reinstall',
             'device_activity_high', 'device_activity_very_high', 'play_device_integrity_failed',
@@ -154,7 +159,15 @@ final class EnumsTest extends TestCase
 
         yield 'DeviceKind' => [DeviceKind::class, ['desktop', 'mobile', 'tablet', 'server']];
 
-        yield 'VisitorKind' => [VisitorKind::class, ['human', 'ai_bot', 'automation', 'search_crawler']];
+        yield 'VisitorKind' => [VisitorKind::class, ['human', 'ai_bot', 'automation', 'search_crawler', 'unknown']];
+
+        yield 'AiPurpose' => [AiPurpose::class, ['training', 'search', 'user_fetch', 'agent']];
+
+        yield 'AiRuntime' => [AiRuntime::class, ['provider_cloud', 'hosted_browser', 'user_device']];
+
+        yield 'AiVerificationMethod' => [AiVerificationMethod::class, ['signature', 'ip_list', 'reverse_dns', 'none']];
+
+        yield 'AiVerificationResult' => [AiVerificationResult::class, ['pass', 'fail', 'not_attempted']];
     }
 
     public function testConstantsCompareIdenticalToDecodedFields(): void

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Fingerly\Tests;
 
+use Fingerly\AiPurpose;
 use Fingerly\ApiException;
 use Fingerly\Client;
 use Fingerly\ConfigurationException;
+use Fingerly\VisitorKind;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -147,10 +149,16 @@ final class EventsTest extends TestCase
             'limit' => 25,
             'visitor' => 'vis_1',
             'level' => 'high',
+            'kind' => VisitorKind::AI_BOT,
+            'ai_provider' => 'OpenAI',
+            'ai_purpose' => AiPurpose::USER_FETCH,
         ]);
 
         $query = $this->server->first()['query'];
         foreach ([
+            'kind=ai_bot',
+            'ai_provider=OpenAI',
+            'ai_purpose=user_fetch',
             'from=2026-09-17T00%3A00%3A00%2B00%3A00',
             'to=2026-09-18T00%3A00%3A00Z',
             'page=2',
@@ -187,6 +195,21 @@ final class EventsTest extends TestCase
         $this->expectException(ConfigurationException::class);
         $this->expectExceptionMessageMatches('/levl/');
         $this->client()->events->list(['levl' => 'high']);
+    }
+
+    public function testRefusesAFilterThatIsNotAString(): void
+    {
+        $this->server = TestServer::always(200, Fixtures::page());
+
+        foreach ([['visitor' => ['a']], ['level' => 1.5], ['kind' => true], ['ai_provider' => 7], ['ai_purpose' => ['training']]] as $query) {
+            try {
+                $this->client()->events->list($query);
+                self::fail('must be refused: '.json_encode($query));
+            } catch (ConfigurationException $e) {
+                self::assertStringContainsString((string) array_key_first($query), $e->getMessage());
+            }
+        }
+        self::assertSame(0, $this->server->requestCount(), 'an invalid filter was sent');
     }
 
     public function testRefusesAWindowBoundThatIsNotADate(): void

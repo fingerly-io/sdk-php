@@ -410,6 +410,12 @@ final class ProxyHardeningTest extends TestCase
                 ['proxy_key' => 'fly_px_production_SECRETMARK', 'path' => 'nope'],
                 ['proxy_key' => 'fly_px_production_SECRETMARK', 'allowed_origins' => 'nope'],
                 ['proxy_key' => 'fly_px_production_SECRETMARK', 'http_client' => new \stdClass()],
+                // A key pasted into the wrong option.
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'path' => 'fly_px_production_SECRETMARK'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'api_version' => 'fly_px_production_SECRETMARK'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'timeout' => 'fly_px_production_SECRETMARK'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'max_body_bytes' => 'fly_px_production_SECRETMARK'],
+                ['proxy_key' => 'fly_px_production_SECRETMARK', 'allowed_origins' => ['fly_px_production_SECRETMARK', 7]],
             ] as $i => $options) {
                 try {
                     new Proxy($options + ['client_ip' => static fn (ProxyRequest $r): string => self::CLIENT_IP]);
@@ -418,7 +424,7 @@ final class ProxyHardeningTest extends TestCase
                     $leaks = [...$leaks, ...self::leaks($e, "proxy case {$i}")];
                 }
             }
-            foreach ([['endpointt' => 'x'], ['endpoint' => 'ftp://x']] as $i => $options) {
+            foreach ([['endpointt' => 'x'], ['endpoint' => 'ftp://x'], ['api_version' => 'fly_sk_production_SECRETMARK'], ['timeout' => 'fly_sk_production_SECRETMARK']] as $i => $options) {
                 try {
                     new Client('fly_sk_production_SECRETMARK', $options);
                     self::fail("client case {$i} should have been refused");

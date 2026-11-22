@@ -41,6 +41,8 @@ final class VerifyTest extends TestCase
         self::assertSame('POST', $request['method']);
         self::assertSame('/api/v1/events/req%2F1/consume', $request['path']);
         self::assertSame('', $request['body']);
+        // A POST without a body still says so; some front ends answer 411.
+        self::assertSame('0', TestServer::header($request, 'content-length'));
         self::assertSame(TestServer::SECRET_KEY, TestServer::header($request, 'x-api-key'));
         self::assertSame(1, $this->server->requestCount());
     }

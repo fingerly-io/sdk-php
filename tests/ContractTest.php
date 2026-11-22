@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace Fingerly\Tests;
 
+use Fingerly\AiPurpose;
+use Fingerly\AiRuntime;
+use Fingerly\AiVerificationMethod;
+use Fingerly\AiVerificationResult;
 use Fingerly\ApiException;
 use Fingerly\Client;
 use Fingerly\EventTrigger;
+use Fingerly\VisitorKind;
 use Fingerly\Webhook;
 use PHPUnit\Framework\TestCase;
 
@@ -80,7 +85,56 @@ final class ContractTest extends TestCase
             );
             // Whatever this build did not model is still reachable.
             self::assertSame($body, $event->raw, $fixture['name']);
+
+            self::assertSame($body['visitor_kind'] ?? null, $event->visitorKind, $fixture['name']);
+            // ai is absent on every row that is not an AI agent.
+            self::assertSame(isset($body['ai']), null !== $event->ai, $fixture['name']);
         }
+    }
+
+    public function testReadsTheAiAgentFixture(): void
+    {
+        $this->serve(self::fixtureNamed('ai_agent'));
+        $event = $this->client()->events->get('req_1');
+
+        self::assertSame(VisitorKind::AI_BOT, $event->visitorKind);
+        self::assertNotNull($event->ai);
+        self::assertSame('ChatGPT-User', $event->ai->name);
+        self::assertSame('OpenAI', $event->ai->provider);
+        self::assertSame(AiPurpose::USER_FETCH, $event->ai->purpose);
+        self::assertSame(AiRuntime::PROVIDER_CLOUD, $event->ai->runtime);
+        self::assertTrue($event->ai->declared);
+        self::assertSame(AiVerificationMethod::NONE, $event->ai->verification->method);
+        self::assertSame(AiVerificationResult::NOT_ATTEMPTED, $event->ai->verification->result);
+    }
+
+    public function testReadsAnEventWithoutAi(): void
+    {
+        $fixture = self::fixtureNamed('event');
+        self::assertArrayNotHasKey('ai', $fixture['body']);
+
+        $this->serve($fixture);
+
+        self::assertNull($this->client()->events->get('req_1')->ai);
+    }
+
+    public function testReadsAiValuesThisSdkDoesNotKnow(): void
+    {
+        $fixture = self::fixtureNamed('ai_agent');
+        $fixture['body']['visitor_kind'] = 'future_kind';
+        $fixture['body']['ai']['purpose'] = 'future_purpose';
+        $fixture['body']['ai']['runtime'] = 'future_runtime';
+        $fixture['body']['ai']['verification'] = ['method' => 'future_method', 'result' => 'future_result'];
+        $this->serve($fixture);
+
+        $event = $this->client()->events->get('req_1');
+
+        self::assertSame('future_kind', $event->visitorKind);
+        self::assertNotNull($event->ai);
+        self::assertSame('future_purpose', $event->ai->purpose);
+        self::assertSame('future_runtime', $event->ai->runtime);
+        self::assertSame('future_method', $event->ai->verification->method);
+        self::assertSame('future_result', $event->ai->verification->result);
     }
 
     public function testReadsEveryPageFixture(): void
@@ -292,6 +346,18 @@ final class ContractTest extends TestCase
         }
 
         return $matching;
+    }
+
+    /** @return array<string, mixed> */
+    private static function fixtureNamed(string $name): array
+    {
+        foreach (self::json('fixtures.json')['responses'] as $fixture) {
+            if ($fixture['name'] === $name) {
+                return $fixture;
+            }
+        }
+
+        self::fail('no fixture named '.$name);
     }
 
     /**

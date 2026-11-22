@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.5.0
+
+- Added `\Fingerly\AgentSightings`, which reports the requests your server
+  served so AI crawlers and fetchers that never run JavaScript are seen, and
+  answers `lookup()` from what Fingerly said about each one, never waiting on
+  the network and never throwing. Mount `AgentSightings\Psr15Middleware`,
+  `AgentSightings\LaravelMiddleware` or `AgentSightings\SymfonyListener`.
+  Under PHP-FPM the answers and pending reports live in APCu, shared by the
+  pool, and are sent after `fastcgi_finish_request()`; on Octane, RoadRunner,
+  Swoole or FrankenPHP worker mode pass `'long_running' => true`. The
+  low-level call is `$fingerly->agents->reportSightings()`, with
+  `AgentSightingReport`, `AgentSightingsAnswer` and `AgentSighting`.
+- `Event::$ai` names the AI agent behind an `ai_bot` event as an `AiAgent`
+  (name, provider, purpose, runtime, whether it declared itself, and an
+  `AiVerification` of how far its claim was checked), with the `AiPurpose`,
+  `AiRuntime`, `AiVerificationMethod` and `AiVerificationResult` constants.
+- `events->list()` filters on `kind`, `ai_provider` and `ai_purpose`.
+- `Signal::AI_SPOOFED` and `Signal::IDENTITY_OBFUSCATED` were added;
+  `Signal::VPN_TIMEZONE`, which the server no longer sends, was removed.
+- The proxy forwards the Web Bot Auth `Signature`, `Signature-Input` and
+  `Signature-Agent` headers, each at most 4096 bytes.
+- `ApiException::getRateLimitScope()` names the limit behind a `429`
+  (`ApiException::RATE_LIMIT_SCOPE_DAILY` for the daily allowance).
+  `TimeoutException::$requestSent` and `ConnectionException::$requestWritten`
+  say whether the API may have acted on the request.
+- Reporting never holds a response open: the Laravel and Symfony adapters
+  send from their terminate hooks only on a long-running server, so the
+  built-in server and Apache's module never wait for Fingerly, and the send
+  after a PHP-FPM response runs after your own shutdown functions.
+- A slow or silent API holds a worker for one 5 second deadline at most: a
+  due send makes one call, `flush()` starts none after 10 seconds, and a
+  report that timed out after it was sent backs off as other failures do.
+- A `429` pauses reporting for its `Retry-After`, held between a second and
+  a day, so a far-future value no longer stops reporting for the life of the
+  process or of the PHP-FPM pool.
+- Reporting under PHP-FPM recovers on its own when an APCu entry is lost,
+  for example after a day without traffic, and APCu entries are kept apart
+  per SDK version, so an upgrade never reads entries an older version wrote.
+- A `long_running` instance is closed when the process exits normally, so a
+  worker that stops gracefully sends the reports it still holds.
+- A sightings header is measured as the API reads it: one that is not UTF-8
+  travels as U+FFFD, three bytes a byte, so a user agent under 4096 bytes
+  here but over them there no longer makes the API refuse the whole batch.
+- A sightings `Host` over 4096 bytes as the API reads it is left out of the
+  item, and a method over 4096 bytes is not reported, so no item can make the
+  API refuse its batch.
+- An answer item the SDK cannot read leaves only that request unknown; the
+  other answers of the batch are kept in their positions.
+- `VisitorKind::UNKNOWN` names the answer for a reported request the API
+  could not use. It comes with a `ttl` of 0, so it is never remembered and
+  that request stays unknown; the rest of the batch is answered as usual. A
+  `422` now means no item in the batch was usable.
+- The send after a PHP-FPM response writes an open PHP session first, so the
+  visitor's next request no longer waits on its lock for the send.
+- `AgentSightings\Psr15Middleware` sends `Host` as the client sent it, port
+  included, as the Laravel and Symfony adapters do; slim/psr7 rebuilt it
+  from the URI without the port.
+- Options that were misread or ignored are refused: a non-string
+  `api_version`, `max_body_bytes` of `PHP_INT_MAX` (which made the proxy
+  throw), an `allowed_origins` entry that is not an origin (a trailing slash
+  and capitals are normalised), `http_client`, `request_factory` or
+  `stream_factory` that is not its PSR type, and an `events->list()` filter
+  that is not a string. A key passed in the wrong option stays out of
+  exception traces.
+- A `POST` without a body (`consume`, the DeviceCheck query) carries
+  `Content-Length: 0`.
+- The README and `DeviceCheck` describe one read and one write token per
+  identification: a check-then-mark flow reads and writes on the same
+  request id.
+- The README's verify sample checks `$result->event` for null, and the
+  sightings setup shows the Laravel binding, Octane's `warm` list and the
+  Symfony service.
+
 ## 0.4.1
 
 - Each `AttestSkippedReason` constant carries a description of when the SDK

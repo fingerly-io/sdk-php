@@ -12,7 +12,12 @@ namespace Fingerly;
  */
 final class TimeoutException extends \RuntimeException implements FingerlyException
 {
-    public function __construct(?\Throwable $previous = null)
+    /**
+     * @param bool $requestSent whether any of the request had been written when the
+     *                          deadline elapsed, so the server may have acted on it;
+     *                          false when it never got past connecting
+     */
+    public function __construct(?\Throwable $previous = null, public readonly bool $requestSent = true)
     {
         parent::__construct('Fingerly request timed out', 0, $previous);
     }
