@@ -1249,6 +1249,42 @@ final class AgentSightingsTest extends TestCase
         self::assertSame("application, registered first\napplication, registered later\nsent\n", $output);
     }
 
+    public function testTheSendAfterTheResponseReleasesAnOpenSession(): void
+    {
+        $this->serve([['status' => 500, 'body' => '{}']]);
+        $sessions = sys_get_temp_dir().'/fingerly-sessions-'.bin2hex(random_bytes(6));
+        mkdir($sessions);
+
+        try {
+            $output = self::runScript(<<<'PHP'
+                session_save_path($argv[2]);
+                session_start(['use_cookies' => 0, 'cache_limiter' => '']);
+                $_SESSION['visits'] = 1;
+                $sightings = new Fingerly\AgentSightings([
+                    'secret_key' => 'fly_sk_production_testonlysecret',
+                    'client_ip' => static fn (Fingerly\Proxy\ProxyRequest $r): ?string => $r->remoteAddress,
+                    'endpoint' => $argv[1],
+                    'allow_insecure_loopback' => true,
+                    'on_error' => static function (string $line): void {
+                        echo PHP_SESSION_ACTIVE === session_status() ? "sent holding the session\n" : "sent after the session was written\n";
+                    },
+                ], new Fingerly\AgentSightings\MemoryStore(16));
+                for ($i = 0; $i < 200; ++$i) {
+                    $sightings->report(new Fingerly\Proxy\ProxyRequest('GET', '/', ['user-agent' => 'ua '.$i], '', '192.0.2.1'), 'text/html');
+                }
+                PHP, $this->server()->baseUrl(), $sessions);
+            // Held across the send, the session's lock would keep the
+            // visitor's next request waiting for the API.
+            self::assertSame("sent after the session was written\n", $output);
+            $files = glob($sessions.'/sess_*') ?: [];
+            self::assertCount(1, $files);
+            self::assertSame('visits|i:1;', file_get_contents($files[0]));
+        } finally {
+            array_map('unlink', glob($sessions.'/*') ?: []);
+            rmdir($sessions);
+        }
+    }
+
     public function testALongRunningInstanceIsClosedWhenTheProcessExits(): void
     {
         $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN]])]);

@@ -484,6 +484,12 @@ final class AgentSightings
                     } elseif (\function_exists('litespeed_finish_request')) {
                         litespeed_finish_request();
                     }
+                    // PHP writes an open session, and releases its lock, only
+                    // once the script ends; held across the send, it would
+                    // keep the visitor's next request waiting for it.
+                    if (\function_exists('session_status') && \PHP_SESSION_ACTIVE === session_status()) {
+                        session_write_close();
+                    }
                     $flush();
                 });
             });
