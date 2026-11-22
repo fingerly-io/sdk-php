@@ -655,7 +655,8 @@ final class AgentSightings
                 $this->pauseFor($store, self::AUTH_PAUSE);
                 $this->logThrottled($store, 'auth_logged_at', sprintf('the API refused the secret key (%d): it is wrong or revoked; reports are dropped and sending pauses for 60 seconds', $status));
             } else {
-                // 422, every other 4xx and 5xx, and a 200 this SDK cannot read.
+                // 422 (no item in the batch was usable), every other 4xx and
+                // 5xx, and a 200 this SDK cannot read.
                 $store->settle($items);
                 $this->logThrottled($store, 'invalid_logged_at', sprintf('the API did not take a report (%d %s); the batch was dropped', $status, $e->getErrorCode() ?? 'error'));
             }

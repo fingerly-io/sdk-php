@@ -209,7 +209,7 @@ release has not heard of.
 | `Platform` | `Event::$platform` | `WEB`, `ANDROID`, `IOS` |
 | `AnonymityNetwork` | `Event::$anonymityNetwork` | `TOR`, `RELAY`, `VPN`, `PROXY`, `HOSTING` |
 | `DeviceKind` | `Event::$deviceKind` | `DESKTOP`, `MOBILE`, `TABLET`, `SERVER` |
-| `VisitorKind` | `Event::$visitorKind`, the `kind` filter | `HUMAN`, `AI_BOT`, `AUTOMATION`, `SEARCH_CRAWLER` |
+| `VisitorKind` | `Event::$visitorKind`, the `kind` filter, `AgentSighting::$visitorKind` | `HUMAN`, `AI_BOT`, `AUTOMATION`, `SEARCH_CRAWLER`, and `UNKNOWN` (only in an agent sightings answer: a request the server could not use) |
 | `AiPurpose` | `AiAgent::$purpose`, the `ai_purpose` filter | `TRAINING`, `SEARCH`, `USER_FETCH`, `AGENT` |
 | `AiRuntime` | `AiAgent::$runtime` | `PROVIDER_CLOUD`, `HOSTED_BROWSER`, `USER_DEVICE` |
 | `AiVerificationMethod` | `AiVerification::$method` | `SIGNATURE`, `IP_LIST`, `REVERSE_DNS`, `NONE` |
@@ -858,7 +858,9 @@ method is over 4096 bytes, or whose `client_ip` callback gives no single
 address, is not reported; a `Host` or Web Bot Auth header over 4096 bytes is
 left out. Lengths are counted as Fingerly reads them, where each byte that is
 not UTF-8 arrives as a three-byte U+FFFD. An answer item the SDK cannot read
-leaves that one request unknown.
+leaves that one request unknown. So does a request Fingerly could not use: it
+is answered `VisitorKind::UNKNOWN` with a `ttl` of 0, so it is never
+remembered, and the rest of the batch is answered as usual.
 
 ### Memory and sending
 
@@ -867,7 +869,7 @@ leaves that one request unknown.
 | Answers remembered | 4096 by default (`capacity`; a larger value is held to 65536), least recently used dropped first, each for the `ttl` Fingerly gave, a day at most. About 1.5 MB at the default, about 25 MB at the most. When Fingerly's rules change, every remembered answer is dropped. |
 | Pending reports | At most 1000, the batch being sent included. Repeats of the same request are one report with a count, cache hits included, so the console counts them; signed requests are never folded. When the buffer is full, a new request is not reported and `droppedCount()` goes up. |
 | Sending | Up to 200 reports per call, when 200 or 64 KiB are pending or 2 seconds after the oldest, at most one call at a time, each with a 5 second deadline. A due send after a response makes one call, so a slow API holds a worker for one deadline at most; `flush()` starts no call after 10 seconds. Never on the request being served. |
-| Failures | Requests are served as usual and `lookup()` keeps answering. A rate limit keeps the reports until `Retry-After` has passed, a second at least and a day at most; a wrong or revoked key drops them and pauses sending for a minute; a `503` or a network error before any answer keeps them and retries with backoff from 1 to 60 seconds; a call that timed out, or whose connection failed, after it was sent is dropped rather than counted twice, and sending backs off the same way; any other answer drops them. A failure is logged at most once a minute, and no log line holds a reported field. |
+| Failures | Requests are served as usual and `lookup()` keeps answering. A rate limit keeps the reports until `Retry-After` has passed, a second at least and a day at most; a wrong or revoked key drops them and pauses sending for a minute; a `503` or a network error before any answer keeps them and retries with backoff from 1 to 60 seconds; a call that timed out, or whose connection failed, after it was sent is dropped rather than counted twice, and sending backs off the same way; a `422` (no item in the batch was usable) and any other answer drop them. A failure is logged at most once a minute, and no log line holds a reported field. |
 
 Under **PHP-FPM** the cache and the pending reports live in APCu, shared by
 the pool's workers and held to the same bounds. The request that makes a send

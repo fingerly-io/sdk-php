@@ -159,7 +159,7 @@ final class EnumsTest extends TestCase
 
         yield 'DeviceKind' => [DeviceKind::class, ['desktop', 'mobile', 'tablet', 'server']];
 
-        yield 'VisitorKind' => [VisitorKind::class, ['human', 'ai_bot', 'automation', 'search_crawler']];
+        yield 'VisitorKind' => [VisitorKind::class, ['human', 'ai_bot', 'automation', 'search_crawler', 'unknown']];
 
         yield 'AiPurpose' => [AiPurpose::class, ['training', 'search', 'user_fetch', 'agent']];
 

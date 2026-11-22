@@ -824,6 +824,33 @@ final class AgentSightingsTest extends TestCase
     }
 
     #[DataProvider('stores')]
+    public function testAnItemTheApiCouldNotUseStaysUnknownAndTheRestAreStored(string $store): void
+    {
+        $this->serve([
+            $this->answer('r1', [[60, VisitorKind::AI_BOT, 'GPTBot'], [0, VisitorKind::UNKNOWN], [60, VisitorKind::AI_BOT, 'GPTBot']]),
+            $this->answer('r1', [[60, VisitorKind::HUMAN]]),
+        ]);
+        $sightings = $this->sightings($store);
+        $requests = [];
+        foreach (['a', 'b', 'c'] as $i => $userAgent) {
+            $requests[] = $request = self::request($userAgent, '198.51.100.'.($i + 1));
+            $sightings->report($request, 'text/html');
+        }
+        $sightings->flush();
+
+        self::assertSame(['a', 'b', 'c'], array_column($this->sentItems(0), 'user_agent'));
+        self::assertSame(VisitorKind::AI_BOT, $sightings->lookup($requests[0])->visitorKind);
+        self::assertSame(AgentSighting::unknown(), $sightings->lookup($requests[1]), 'ttl 0 is never remembered');
+        self::assertSame(VisitorKind::AI_BOT, $sightings->lookup($requests[2])->visitorKind);
+        self::assertSame([], $this->logs);
+        self::assertSame(0, $sightings->droppedCount());
+
+        // Nothing was kept back to send again.
+        $sightings->flush();
+        self::assertSame(1, $this->server()->requestCount());
+    }
+
+    #[DataProvider('stores')]
     public function testAFullBufferDropsNewKeysAndCountsThem(string $store): void
     {
         $this->serve([$this->answer('r1', array_fill(0, 200, [60, VisitorKind::HUMAN]))]);

@@ -27,7 +27,8 @@ final class AgentSighting
      * @param int          $ttl         seconds the answer may be reused for the same user agent, address
      *                                  and Signature-Agent; 0 for a signed request, which is checked every time
      * @param string       $visitorKind `human`, `ai_bot`, `automation` or `search_crawler`; see {@see VisitorKind}.
-     *                                  `''` for {@see self::unknown()}
+     *                                  {@see VisitorKind::UNKNOWN} with ttl 0 for a request the API could not
+     *                                  use, which is never remembered. `''` for {@see self::unknown()}
      * @param null|string  $agent       the agent's name where the API knows it, such as `GPTBot` or `Googlebot`
      * @param null|AiAgent $ai          present when $visitorKind is {@see VisitorKind::AI_BOT}
      */

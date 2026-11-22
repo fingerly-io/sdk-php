@@ -31,15 +31,17 @@ final class Agents
 
     /**
      * Sends up to 200 served requests and answers what sent each one, in the
-     * same order.
+     * same order. An item the API could not use is answered
+     * {@see VisitorKind::UNKNOWN} with ttl 0 in its own position, and is
+     * neither classified nor counted; the others are answered as usual.
      *
      * @param list<AgentSightingReport> $items
      *
      * @throws ConfigurationException if there are no items or more than 200
      * @throws ApiException           `429` with {@see ApiException::getRetryAfter()} and
      *                                {@see ApiException::getRateLimitScope()} when a limit or the daily
-     *                                allowance refused the call; `422 invalid_request` for an item the
-     *                                API cannot read; `401` / `403` for a wrong or revoked key
+     *                                allowance refused the call; `422 invalid_request` when no item in
+     *                                the batch was usable; `401` / `403` for a wrong or revoked key
      * @throws TimeoutException
      * @throws ConnectionException
      */
