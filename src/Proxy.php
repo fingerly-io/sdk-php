@@ -191,14 +191,17 @@ final class Proxy
             $upstream ?? Config::DEFAULT_ENDPOINT,
             $allowInsecureLoopback,
             'upstream',
-        ).'/api/'.Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null).'/ingest';
+        ).'/api/'.Config::normalizeApiVersion($apiVersion).'/ingest';
         $path = $options['path'] ?? null;
         $this->path = null === $path ? null : Config::normalizePath($path);
         $this->allowedOrigins = self::normalizeAllowedOrigins($options['allowed_origins'] ?? null);
-        $this->maxBodyBytes = Config::positiveInt(
-            $options['max_body_bytes'] ?? self::DEFAULT_MAX_BODY_BYTES,
-            'max_body_bytes',
-        );
+        $maxBodyBytes = Config::positiveInt($options['max_body_bytes'] ?? self::DEFAULT_MAX_BODY_BYTES, 'max_body_bytes');
+        if (\PHP_INT_MAX === $maxBodyBytes) {
+            // Reading one byte past the cap is how an oversized body is told
+            // apart, and PHP_INT_MAX + 1 is a float no stream read takes.
+            throw new ConfigurationException('max_body_bytes must be below PHP_INT_MAX');
+        }
+        $this->maxBodyBytes = $maxBodyBytes;
         $timeout = Config::positiveNumber($options['timeout'] ?? self::DEFAULT_TIMEOUT, 'timeout');
         $this->timeout = $timeout;
         $this->clientIp = $clientIp;
@@ -544,7 +547,7 @@ final class Proxy
     /**
      * @return list<string>
      */
-    private static function normalizeAllowedOrigins(mixed $value): array
+    private static function normalizeAllowedOrigins(#[\SensitiveParameter] mixed $value): array
     {
         if (null === $value) {
             return [];
@@ -558,9 +561,11 @@ final class Proxy
             if (!is_string($item)) {
                 throw new ConfigurationException('allowed_origins must contain only strings');
             }
-            $trimmed = trim($item);
-            if ('' === $trimmed || '' === self::copyable($trimmed)) {
-                throw new ConfigurationException('allowed_origins must not contain empty or invalid origins');
+            // A browser's Origin is scheme://host[:port], lowercase, with no
+            // path, so an entry spelled any other way could never match it.
+            $trimmed = strtolower(rtrim(trim($item), '/'));
+            if ('' === self::copyable($trimmed) || 1 !== preg_match('#\A[a-z][a-z0-9+.-]*://[^/?\#@\s]+\z#', $trimmed)) {
+                throw new ConfigurationException('allowed_origins must contain only origins such as https://shop.example');
             }
             if (!in_array($trimmed, $origins, true)) {
                 $origins[] = $trimmed;

@@ -77,6 +77,8 @@ final class ProxyTest extends TestCase
             ['path' => false],
             ['api_version' => 'beta'],
             ['max_body_bytes' => 0],
+            ['max_body_bytes' => \PHP_INT_MAX],
+            ['api_version' => 2],
             ['timeout' => 0],
             ['upstream' => 'https://user:pass@example.com'],
             ['on_error' => 'not callable'],
@@ -894,6 +896,25 @@ final class ProxyTest extends TestCase
         $post = $proxy->handle($this->identify(self::PATH, ['origin' => 'https://app.example.com']));
         self::assertSame(200, $post->status);
         self::assertSame('https://app.example.com', $post->headers['access-control-allow-origin'] ?? null);
+    }
+
+    public function testAllowedOriginsAreSpelledAsABrowserSendsThem(): void
+    {
+        $base = ['proxy_key' => TestServer::PROXY_KEY, 'path' => self::PATH, 'client_ip' => fn (ProxyRequest $request): string => self::CLIENT_IP];
+        // A trailing slash or capitals would otherwise never equal an Origin.
+        $proxy = new Proxy($base + ['allowed_origins' => ['https://App.Example.com/', 'http://localhost:5173']]);
+        foreach (['https://app.example.com', 'http://localhost:5173'] as $origin) {
+            $pre = $proxy->handle(new ProxyRequest('OPTIONS', self::PATH, ['origin' => $origin]));
+            self::assertSame(204, $pre->status, $origin);
+        }
+        foreach (['https://app.example.com/checkout', 'app.example.com', 'https://user@app.example.com', '*'] as $entry) {
+            try {
+                new Proxy($base + ['allowed_origins' => [$entry]]);
+                self::fail($entry.' should have been refused');
+            } catch (ConfigurationException $e) {
+                self::assertStringContainsString('allowed_origins', $e->getMessage());
+            }
+        }
     }
 
     /** The callback sees the request, so it can read whatever header you trust. */

@@ -147,7 +147,7 @@ final class ClientTest extends TestCase
 
     public function testRefusesAnApiVersionThatIsNotOne(): void
     {
-        foreach (['', '1', 'v0', 'v01', 'v1beta', "v1\n", ' v1'] as $version) {
+        foreach (['', '1', 'v0', 'v01', 'v1beta', "v1\n", ' v1', 2, ['v1'], false] as $version) {
             try {
                 new Client(TestServer::SECRET_KEY, ['api_version' => $version]);
                 self::fail(sprintf('%s should have been refused', var_export($version, true)));

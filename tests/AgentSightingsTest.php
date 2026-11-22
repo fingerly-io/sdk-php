@@ -1311,6 +1311,7 @@ final class AgentSightingsTest extends TestCase
             ['secret_key' => TestServer::PROXY_KEY, 'client_ip' => static fn (): string => '192.0.2.1'],
             ['secret_key' => TestServer::SECRET_KEY],
             ['secret_key' => TestServer::SECRET_KEY, 'client_ip' => static fn (): string => '192.0.2.1', 'long_runnig' => true],
+            ['secret_key' => TestServer::SECRET_KEY, 'client_ip' => static fn (): string => '192.0.2.1', 'api_version' => 2],
         ] as $options) {
             try {
                 new AgentSightings($options);

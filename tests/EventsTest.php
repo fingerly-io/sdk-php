@@ -197,6 +197,21 @@ final class EventsTest extends TestCase
         $this->client()->events->list(['levl' => 'high']);
     }
 
+    public function testRefusesAFilterThatIsNotAString(): void
+    {
+        $this->server = TestServer::always(200, Fixtures::page());
+
+        foreach ([['visitor' => ['a']], ['level' => 1.5], ['kind' => true], ['ai_provider' => 7], ['ai_purpose' => ['training']]] as $query) {
+            try {
+                $this->client()->events->list($query);
+                self::fail('must be refused: '.json_encode($query));
+            } catch (ConfigurationException $e) {
+                self::assertStringContainsString((string) array_key_first($query), $e->getMessage());
+            }
+        }
+        self::assertSame(0, $this->server->requestCount(), 'an invalid filter was sent');
+    }
+
     public function testRefusesAWindowBoundThatIsNotADate(): void
     {
         $this->server = TestServer::always(200, Fixtures::page());

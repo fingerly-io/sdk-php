@@ -68,14 +68,28 @@ final class Client
             throw new ConfigurationException('allow_insecure_loopback must be a boolean');
         }
         $origin = Config::bareOrigin($endpoint ?? Config::DEFAULT_ENDPOINT, $allowInsecureLoopback, 'endpoint');
-        $apiVersion = $options['api_version'] ?? null;
-        $apiVersion = Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null);
+        $apiVersion = Config::normalizeApiVersion($options['api_version'] ?? null);
         $timeout = Config::positiveNumber($options['timeout'] ?? self::DEFAULT_TIMEOUT, 'timeout');
 
         $httpClient = $options['http_client'] ?? null;
         $requestFactory = $options['request_factory'] ?? null;
+        $streamFactory = $options['stream_factory'] ?? null;
+        // Checked by name, so neither PSR package has to be installed for a
+        // build that never passes a client.
+        if (null !== $httpClient && !is_a($httpClient, 'Psr\Http\Client\ClientInterface')) {
+            throw new ConfigurationException('http_client must be a PSR-18 Psr\Http\Client\ClientInterface');
+        }
         if (null !== $httpClient && null === $requestFactory) {
             throw new ConfigurationException('request_factory is required alongside http_client');
+        }
+        if (null !== $requestFactory && !is_a($requestFactory, 'Psr\Http\Message\RequestFactoryInterface')) {
+            throw new ConfigurationException('request_factory must be a PSR-17 Psr\Http\Message\RequestFactoryInterface');
+        }
+        if (null !== $streamFactory && !is_a($streamFactory, 'Psr\Http\Message\StreamFactoryInterface')) {
+            throw new ConfigurationException('stream_factory must be a PSR-17 Psr\Http\Message\StreamFactoryInterface');
+        }
+        if (null === $httpClient && (null !== $requestFactory || null !== $streamFactory)) {
+            throw new ConfigurationException('request_factory and stream_factory are used only alongside http_client');
         }
 
         $secret = new Secret($secretKey);
@@ -84,7 +98,7 @@ final class Client
             redactKey: $secret,
             httpClient: is_object($httpClient) ? $httpClient : null,
             requestFactory: is_object($requestFactory) ? $requestFactory : null,
-            streamFactory: is_object($options['stream_factory'] ?? null) ? $options['stream_factory'] : null,
+            streamFactory: is_object($streamFactory) ? $streamFactory : null,
         );
         $this->events = new Events($transport, $origin.'/api/'.$apiVersion, $secret);
         $this->deviceCheck = new DeviceCheck($transport, $origin.'/api/'.$apiVersion, $secret);

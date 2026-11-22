@@ -204,8 +204,7 @@ final class AgentSightings
             throw new ConfigurationException('allow_insecure_loopback must be a boolean');
         }
         $origin = Config::bareOrigin($endpoint ?? Config::DEFAULT_ENDPOINT, $allowInsecureLoopback, 'endpoint');
-        $apiVersion = $options['api_version'] ?? null;
-        $apiVersion = Config::normalizeApiVersion(is_string($apiVersion) ? $apiVersion : null);
+        $apiVersion = Config::normalizeApiVersion($options['api_version'] ?? null);
         // Above the hard maximum is held to it rather than refused.
         $capacity = min(self::MAX_CAPACITY, Config::positiveInt($options['capacity'] ?? self::DEFAULT_CAPACITY, 'capacity'));
         $longRunning = $options['long_running'] ?? false;

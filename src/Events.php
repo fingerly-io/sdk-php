@@ -196,7 +196,7 @@ final class Events
      *                                    from a query string or a config file, where every value
      *                                    is `mixed`, and validating them here is the point.
      *
-     * @throws ConfigurationException if a date, page or limit is not usable
+     * @throws ConfigurationException if a date, page or limit is not usable, or a filter is not a string
      * @throws ApiException
      * @throws TimeoutException
      * @throws ConnectionException
@@ -218,15 +218,14 @@ final class Events
         if (isset($query['limit'])) {
             $params['limit'] = (string) Config::positiveInt($query['limit'], 'limit');
         }
-        if (isset($query['visitor'])) {
-            $params['visitor'] = (string) $query['visitor'];
-        }
-        if (isset($query['level'])) {
-            $params['level'] = (string) $query['level'];
-        }
-        foreach (['kind', 'ai_provider', 'ai_purpose'] as $filter) {
+        foreach (['visitor', 'level', 'kind', 'ai_provider', 'ai_purpose'] as $filter) {
             if (isset($query[$filter])) {
-                $params[$filter] = (string) $query[$filter];
+                if (!is_string($query[$filter])) {
+                    // An array from `?visitor[]=`, say, rather than a PHP
+                    // warning or a filter the caller never meant.
+                    throw new ConfigurationException(sprintf('%s must be a string', $filter));
+                }
+                $params[$filter] = $query[$filter];
             }
         }
 
