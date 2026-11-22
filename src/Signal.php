@@ -67,6 +67,7 @@ final class Signal
     // Detectors only a native application can produce.
     public const EMULATOR = 'emulator';
     public const ROOT_APPS = 'root_apps';
+    public const BOOTLOADER_UNLOCKED = 'bootloader_unlocked';
     public const APP_CLONER = 'app_cloner';
     public const JAILBREAK = 'jailbreak';
     public const SIMULATOR = 'simulator';
@@ -146,6 +147,7 @@ final class Signal
         self::REMOTE_CONTROL,
         self::EMULATOR,
         self::ROOT_APPS,
+        self::BOOTLOADER_UNLOCKED,
         self::APP_CLONER,
         self::JAILBREAK,
         self::SIMULATOR,
