@@ -217,6 +217,34 @@ final class AgentSightingsAdaptersTest extends TestCase
         self::assertSame(VisitorKind::AI_BOT, $listener->lookup($request)->visitorKind);
     }
 
+    public function testEveryAdapterSendsHostAsTheClientSentIt(): void
+    {
+        $server = ['HTTP_HOST' => 'Shop.Example.com:8443', 'HTTP_USER_AGENT' => self::GPTBOT, 'REMOTE_ADDR' => '20.171.206.9', 'REQUEST_METHOD' => 'GET'];
+        $html = new Psr7Response(200, ['content-type' => 'text/html']);
+        $hosts = [];
+
+        // slim/psr7 builds the Host header from the URI: lowercased, no port.
+        $sightings = $this->sightings();
+        $psr7 = new ServerRequest('GET', 'https://shop.example.com:8443/', ['user-agent' => self::GPTBOT, 'host' => 'shop.example.com'], null, '1.1', $server);
+        (new Psr15Middleware($sightings))->process($psr7, self::handler($html));
+        $sightings->flush();
+        $hosts['psr15'] = $this->sentItems()[0]['host'];
+
+        $sightings = $this->sightings();
+        (new LaravelMiddleware($sightings))->terminate(LaravelRequest::create('/', 'GET', [], [], [], $server), new SymfonyResponse('', 200, ['content-type' => 'text/html']));
+        $sightings->flush();
+        $hosts['laravel'] = $this->sentItems()[0]['host'];
+
+        $sightings = $this->sightings();
+        $event = self::terminateEvent('/');
+        $event->getRequest()->headers->set('host', 'Shop.Example.com:8443');
+        (new SymfonyListener($sightings))->onKernelTerminate($event);
+        $sightings->flush();
+        $hosts['symfony'] = $this->sentItems()[0]['host'];
+
+        self::assertSame(['psr15' => 'Shop.Example.com:8443', 'laravel' => 'Shop.Example.com:8443', 'symfony' => 'Shop.Example.com:8443'], $hosts);
+    }
+
     public function testAdaptersNeverFilterByUserAgent(): void
     {
         $sightings = $this->sightings(['status' => 200, 'body' => $this->answerBody(3)]);
@@ -235,6 +263,7 @@ final class AgentSightingsAdaptersTest extends TestCase
      */
     private function sightings(?array $canned = null, array $options = []): AgentSightings
     {
+        $this->server?->stop();
         $this->server = TestServer::start([$canned ?? ['status' => 200, 'body' => $this->answerBody(1)]]);
         $sightings = new AgentSightings($options + [
             'secret_key' => TestServer::SECRET_KEY,

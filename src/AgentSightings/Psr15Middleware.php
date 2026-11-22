@@ -52,11 +52,16 @@ final class Psr15Middleware implements MiddlewareInterface
      */
     public static function toProxyRequest(ServerRequestInterface $request): ProxyRequest
     {
+        $server = $request->getServerParams();
         $headers = [];
         foreach ($request->getHeaders() as $name => $values) {
-            $headers[(string) $name] = implode(', ', $values);
+            $headers[strtolower((string) $name)] = implode(', ', $values);
         }
-        $server = $request->getServerParams();
+        // Host as the client sent it: slim/psr7 replaces the header with the
+        // URI's host, lowercased and without its port.
+        if (is_string($server['HTTP_HOST'] ?? null)) {
+            $headers['host'] = $server['HTTP_HOST'];
+        }
 
         return new ProxyRequest(
             method: is_string($server['REQUEST_METHOD'] ?? null) ? $server['REQUEST_METHOD'] : $request->getMethod(),
