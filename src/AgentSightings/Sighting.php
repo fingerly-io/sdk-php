@@ -47,7 +47,8 @@ final class Sighting
 
     /**
      * Builds the sighting, or null when the request cannot be reported: a
-     * user agent over the limit, or no single client address.
+     * user agent over the limit as the API reads it, or no single client
+     * address.
      *
      * A Web Bot Auth header that is empty, only whitespace or over the limit
      * counts as absent before anything
@@ -63,7 +64,7 @@ final class Sighting
         string $signatureInput,
         string $signatureAgent,
     ): ?self {
-        if (strlen($userAgent) > self::MAX_HEADER_BYTES) {
+        if (self::sentLength($userAgent) > self::MAX_HEADER_BYTES) {
             return null;
         }
         $ip = null === $clientIp ? null : self::canonicalIp($clientIp);
@@ -160,6 +161,21 @@ final class Sighting
     /** A header as sent: absent when empty, only whitespace, or over the limit. */
     private static function header(string $value): ?string
     {
-        return '' === trim($value) || strlen($value) > self::MAX_HEADER_BYTES ? null : $value;
+        return '' === trim($value) || self::sentLength($value) > self::MAX_HEADER_BYTES ? null : $value;
+    }
+
+    /**
+     * The bytes the API reads for a header. JSON carries each byte that is
+     * not UTF-8 as U+FFFD, three bytes, so a value under the limit here can
+     * be over it there, and the API then refuses the whole batch.
+     */
+    private static function sentLength(string $value): int
+    {
+        if (1 === preg_match('//u', $value)) {
+            return strlen($value);
+        }
+        $sent = json_decode((string) json_encode($value, \JSON_INVALID_UTF8_SUBSTITUTE));
+
+        return is_string($sent) ? strlen($sent) : \PHP_INT_MAX;
     }
 }

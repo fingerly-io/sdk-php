@@ -921,6 +921,30 @@ final class AgentSightingsTest extends TestCase
     }
 
     #[DataProvider('stores')]
+    public function testHeadersAreMeasuredAsTheApiReadsThem(string $store): void
+    {
+        $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN], [60, VisitorKind::HUMAN]])]);
+        $sightings = $this->sightings($store);
+        // 2000 Latin-1 bytes travel in JSON as 2000 U+FFFD, 6000 bytes, which
+        // the API refuses, and with it every other item of the batch.
+        $latin1 = str_repeat("\xE9", 2000);
+        $sightings->report(self::request($latin1, '198.51.100.1'), 'text/html');
+        $sightings->report(self::request('a', '198.51.100.2', '/', [
+            'signature' => $latin1,
+            'signature-input' => 'sig1=()',
+            'signature-agent' => $latin1,
+        ]), 'text/html');
+        $sightings->report(self::request("caf\xE9", '198.51.100.3'), 'text/html');
+        $sightings->flush();
+
+        $items = $this->sentItems(0);
+        self::assertSame([
+            ['user_agent' => 'a', 'client_ip' => '198.51.100.2', 'host' => 'example.com', 'method' => 'GET', 'signature_input' => 'sig1=()', 'count' => 1],
+            ['user_agent' => "caf\u{FFFD}", 'client_ip' => '198.51.100.3', 'host' => 'example.com', 'method' => 'GET', 'count' => 1],
+        ], $items);
+    }
+
+    #[DataProvider('stores')]
     public function testBlankSignatureHeadersAreAbsent(string $store): void
     {
         $this->serve([$this->answer('r1', [[60, VisitorKind::HUMAN]])]);
