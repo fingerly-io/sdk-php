@@ -214,8 +214,10 @@ final class Transport
                 return $length;
             },
         ];
-        if (null !== $body) {
-            $options[\CURLOPT_POSTFIELDS] = $body;
+        if (null !== $body || in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
+            // An empty body too, so a POST without one carries
+            // `Content-Length: 0`, which some front ends require (411).
+            $options[\CURLOPT_POSTFIELDS] = $body ?? '';
         }
         curl_setopt_array($handle, $options);
         if (null !== $this->share) {
