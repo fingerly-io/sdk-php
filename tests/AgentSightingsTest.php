@@ -516,6 +516,28 @@ final class AgentSightingsTest extends TestCase
     }
 
     #[DataProvider('stores')]
+    public function testARetryAfterOverADayPausesADay(string $store): void
+    {
+        // Far-future values must not stop reporting for the life of the
+        // process, or of the PHP-FPM pool that shares the pause in APCu. The
+        // twenty-digit one is not a number PHP's int can hold, so it reads as
+        // no Retry-After, a minute.
+        foreach (['2147483647', '9999999999', 'Fri, 01 Jan 2100 00:00:00 GMT', '99999999999999999999'] as $retryAfter) {
+            $this->serve([
+                ['status' => 429, 'body' => '', 'headers' => ['retry-after' => $retryAfter]],
+                $this->answer('r1', [[60, VisitorKind::HUMAN]]),
+            ]);
+            $sightings = $this->sightings($store);
+            $sightings->report(self::request('a', '198.51.100.1'), 'text/html');
+            $sightings->flush();
+            self::assertLessThanOrEqual($this->now + 86400.0, $this->lastStore?->state()['resume_at'], $retryAfter.' pauses a day at most');
+            $this->now += 86400;
+            $sightings->flush();
+            self::assertSame(2, $this->server()->requestCount(), $retryAfter.': sending resumes after a day');
+        }
+    }
+
+    #[DataProvider('stores')]
     public function testAnUnreadableRetryAfterCountsAsNone(string $store): void
     {
         foreach (['-5', 'soon', '1.5'] as $retryAfter) {

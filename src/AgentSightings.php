@@ -84,6 +84,14 @@ final class AgentSightings
     /** The shortest a 429 stops flushing, whatever its Retry-After, in seconds. */
     private const MIN_RATE_LIMIT_PAUSE = 1.0;
 
+    /**
+     * The longest a 429 stops flushing, whatever its Retry-After, in seconds:
+     * a day, the longest the daily allowance can last. A Retry-After of years
+     * would otherwise stop reporting for the life of the process, and under
+     * PHP-FPM for every worker of the pool.
+     */
+    private const MAX_RATE_LIMIT_PAUSE = 86400.0;
+
     /** How long an explicit flush waits for one already in flight, in seconds. */
     private const WAIT_FOR_FLIGHT = self::DEADLINE + 1.0;
 
@@ -704,15 +712,15 @@ final class AgentSightings
     }
 
     /**
-     * Seconds a 429 pauses sending: Retry-After, never under a second, else
-     * the next UTC day for the daily allowance, else a minute. An unreadable
-     * Retry-After counts as none.
+     * Seconds a 429 pauses sending: Retry-After, held between a second and a
+     * day, else the next UTC day for the daily allowance, else a minute. An
+     * unreadable Retry-After counts as none.
      */
     private function rateLimitPause(ApiException $e): float
     {
         $retryAfter = $e->getRetryAfter();
         if (null !== $retryAfter) {
-            return max(self::MIN_RATE_LIMIT_PAUSE, (float) $retryAfter);
+            return min(self::MAX_RATE_LIMIT_PAUSE, max(self::MIN_RATE_LIMIT_PAUSE, (float) $retryAfter));
         }
         if (ApiException::RATE_LIMIT_SCOPE_DAILY === $e->getRateLimitScope()) {
             return (float) (86400 - (($this->wallClock)() % 86400));
